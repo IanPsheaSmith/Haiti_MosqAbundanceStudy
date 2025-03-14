@@ -1,0 +1,667 @@
+---
+title: "Haiti_MosqAbundance"
+author: "Ian Pshea-Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r Loading required libraries}
+
+  # spatial hurdle libraries
+  library(dplyr)
+  library(ggplot2)
+  library(inlabru)
+  library(terra)
+  library(sf)
+  library(RColorBrewer)
+  library(magrittr)
+  library(patchwork)
+  library(parallel)
+  library(sp)
+  library(countreg)
+  library(gstat)
+  library(MuMIn)
+  library(parallel)
+  library(viridis)
+  library(RColorBrewer)
+  library(readr)
+  library(ggcorrplot)
+  library(corrplot)
+  library(gridExtra)
+  library(ggtext)
+  library(kableExtra)
+
+```
+
+
+
+```{r Loading in Data}
+
+  ##### A note about the data import and below code #####
+  # Data processing and appending covariates is available as a seperate set of
+    # code (HaitiCountModels.Rmd, available upon request to 
+    # ian.smith.gh@gmail.com). Below is import code for the processed dataset,
+    # including both the cleaned abundance data and the covariate data
+    # already extracted from Bioclim & WorldPop.
+
+  # Define GitHub base URL for raw files
+    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/Datasets/"
+  
+  # Define dataset names
+    datasets <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq", 
+                  "HCM_Full_Aem", "HCM_Full_Cxn", "HCM_Full_Psc")
+  
+  # Initialize an empty list to store data
+    dataset_list <- list()
+  
+  # Download and read each dataset directly into R
+    for (dataset in datasets) {
+      file_url <- paste0(base_url, dataset, ".csv")
+      
+      # Read CSV directly into R env
+      dataset_list[[dataset]] <- read.csv(file_url, stringsAsFactors = FALSE)
+      
+      # Assign dataset to global environment
+      assign(dataset, dataset_list[[dataset]], envir = .GlobalEnv)
+      
+      message(paste("Loaded:", dataset))
+    }
+
+  # Test for Aeae
+    head(HCM_Full_Aeae)
+    
+
+  ##### A note about these datasets #####
+  # Each dataset contains the counts for the other species. Of note, the values
+    # for each covariate differ, as we employed different sized buffers to 
+    # extract them depending on the target species (see the manuscript). We 
+    # included the counts of each species in case we wanted to employ a multi-
+    # species distribution model, which was not performed.
+
+```
+
+
+
+```{r Basic Descriptive Tables & Visualizations}
+
+  # Renaming covariates
+  HCM_Full_Aeae_renamed <- HCM_Full_Aeae %>%
+    rename(
+      Precipitation = Precip,
+      Temperature = TMean,
+      `Wind Speed` = WindMean,
+      `Night Lights` = nightlight
+    )
+  
+  # Selecting only the necessary columns for the correlation matrix
+  cor_data <- HCM_Full_Aeae_renamed %>%
+    dplyr::select(Precipitation, Temperature, `Wind Speed`, `Night Lights`, Elevation)
+  
+  # Selecting only the necessary columns for the correlation matrix
+  cor_data <- HCM_Full_Aeae_renamed %>%
+    dplyr::select(Precipitation, Temperature, `Wind Speed`, `Night Lights`, Elevation)
+  
+  # Calculating the correlation matrix
+  cor_matrix <- cor(cor_data, use = "complete.obs")
+  
+  # Define the custom color ramp palette from yellow to pink
+  yellow_pink_colors <- c("#FFF44A", "#FF9D82", "#FF769F", "#FF51BD")
+  
+  # Plotting the correlation matrix using ggcorrplot with a gradient color scale
+  ggcorrplot(cor_matrix, 
+             hc.order = TRUE, 
+             type = "lower", 
+             lab = TRUE, 
+             lab_col = "black", 
+             outline.col = "white", 
+             ggtheme = ggplot2::theme_minimal()) +
+    scale_fill_gradientn(colors = yellow_pink_colors) +
+    ggtitle("Correlation Matrix")
+  
+
+  
+  # Define the path to save the combined plot
+  output_path <- "REPLACE WITH YOUR FOLDER PATH"
+  
+  # Define the variables and their respective titles
+  variables <- c("Quinx", "Aeae", "Aealb")
+  titles <- c(
+    "Counts of *Culex quinquefasciatus*",
+    "Counts of *Aedes aegypti*",
+    "Counts of *Aedes albopictus*"
+  )
+  
+  # Define the colors for each plot
+  colors <- c("lightpink", "orchid", "mediumpurple")
+  
+  # Define a function to create a histogram with a specific color and title
+  create_histogram <- function(data, variable, title, color) {
+    ggplot(data, aes_string(variable)) +
+      geom_histogram(fill = color, color = "black", bins = 30) +
+      labs(title = title, x = variable, y = "Count") +
+      theme_minimal() +
+      theme(
+        plot.title = element_markdown(),
+        plot.background = element_rect(fill = "transparent", color = NA)
+      )
+  }
+  
+  # Create histograms
+  histograms <- lapply(seq_along(variables), function(i) {
+    create_histogram(Haiti_CountTime_clean, variables[i], titles[i], colors[i])
+  })
+  
+  # Find the maximum y-axis limit to use the same for all plots
+  max_y <- max(sapply(histograms, function(p) {
+    ggplot_build(p)$layout$panel_params[[1]]$y.range[2]
+  }))
+  
+  # Update histograms to have the same y-axis limit
+  histograms <- lapply(histograms, function(p) {
+    p + ylim(0, max_y)
+  })
+  
+  # Combine histograms side-by-side
+  combined_plot <- grid.arrange(grobs = histograms, ncol = 3)
+  
+  # Save the combined plot as a PNG with a transparent background
+  ggsave(
+    filename = file.path(output_path, "combined_histograms.png"),
+    plot = combined_plot,
+    device = "png",
+    bg = "transparent",
+    width = 24,  # Adjust width as needed
+    height = 8,  # Adjust height as needed
+    units = "in"
+  )
+  
+  # Save individual histograms as PNGs with transparent backgrounds
+  for (i in seq_along(histograms)) {
+    ggsave(
+      filename = file.path(output_path, paste0(variables[i], "_histogram.png")),
+      plot = histograms[[i]],
+      device = "png",
+      bg = "transparent",
+      width = 8,  # Adjust width as needed
+      height = 8,  # Adjust height as needed
+      units = "in"
+    )
+  }
+  
+    # Summary statistics calculation
+    summary_table <- Haiti_CountTime_clean %>%
+      group_by(Trap_Type) %>%
+      summarise(
+        Total_Aedes_aegypti = sum(Aeae),
+        Mean_Aedes_aegypti = round(mean(Aeae), 2),
+        Median_Aedes_aegypti = round(median(Aeae), 2),
+        Total_Aedes_albopictus = sum(Aealb),
+        Mean_Aedes_albopictus = round(mean(Aealb), 2),
+        Median_Aedes_albopictus = round(median(Aealb), 2),
+        Total_Culex_quinquefasciatus = sum(Quinx),
+        Mean_Culex_quinquefasciatus = round(mean(Quinx), 2),
+        Median_Culex_quinquefasciatus = round(median(Quinx), 2),
+        Total_Culex_nigripalpus = sum(Cxn),
+        Mean_Culex_nigripalpus = round(mean(Cxn), 2),
+        Median_Culex_nigripalpus = round(median(Cxn), 2),
+        Total_Aedes_mediovittatus = sum(Aem),
+        Mean_Aedes_mediovittatus = round(mean(Aem), 2),
+        Median_Aedes_mediovittatus = round(median(Aem), 2),
+        Total_Psorophora_columbiae = sum(Psc),
+        Mean_Psorophora_columbiae = round(mean(Psc), 2),
+        Median_Psorophora_columbiae = round(median(Psc), 2)
+      )
+    
+    # Calculate overall totals, means, and medians
+    total_row <- Haiti_CountTime_clean %>%
+      summarise(
+        Trap_Type = "Total",
+        Total_Aedes_aegypti = sum(Aeae),
+        Mean_Aedes_aegypti = round(mean(Aeae), 2),
+        Median_Aedes_aegypti = round(median(Aeae), 2),
+        Total_Aedes_albopictus = sum(Aealb),
+        Mean_Aedes_albopictus = round(mean(Aealb), 2),
+        Median_Aedes_albopictus = round(median(Aealb), 2),
+        Total_Culex_quinquefasciatus = sum(Quinx),
+        Mean_Culex_quinquefasciatus = round(mean(Quinx), 2),
+        Median_Culex_quinquefasciatus = round(median(Quinx), 2),
+        Total_Culex_nigripalpus = sum(Cxn),
+        Mean_Culex_nigripalpus = round(mean(Cxn), 2),
+        Median_Culex_nigripalpus = round(median(Cxn), 2),
+        Total_Aedes_mediovittatus = sum(Aem),
+        Mean_Aedes_mediovittatus = round(mean(Aem), 2),
+        Median_Aedes_mediovittatus = round(median(Aem), 2),
+        Total_Psorophora_columbiae = sum(Psc),
+        Mean_Psorophora_columbiae = round(mean(Psc), 2),
+        Median_Psorophora_columbiae = round(median(Psc), 2)
+      )
+  
+  
+  # Combine summary table with total row
+  final_table <- bind_rows(summary_table, total_row)
+  
+  # Create a beautiful table
+  kable(final_table, format = "html", escape = FALSE, col.names = c(
+    "Trap Type", 
+    "Total", "Mean", "Median", 
+    "Total", "Mean", "Median",
+    "Total", "Mean", "Median",
+    "Total", "Mean", "Median",
+    "Total", "Mean", "Median",
+    "Total", "Mean", "Median"
+  )) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  full_width = F) %>%
+    add_header_above(c(" " = 1, 
+                       "<i>Aedes aegypti</i>" = 3, 
+                       "<i>Aedes albopictus</i>" = 3, 
+                       "<i>Culex quinquefasciatus</i>" = 3,
+                       "<i>Culex nigripalpus</i>" = 3,
+                       "<i>Aedes mediovittatus</i>" = 3,
+                       "<i>Psorophora columbiae</i>" = 3), escape = FALSE) %>%
+    row_spec(nrow(final_table), bold = TRUE, background = "lightgray")
+  
+  
+  # Add a new variable for the total counts of all species per observation
+  Haiti_CountTime_clean <- Haiti_CountTime_clean %>%
+    mutate(Total_Counts = Aeae + Aealb + Quinx + Cxn + Aem + Psc)
+  
+  # Summary statistics calculation for each species and the new total column
+  summary_table <- Haiti_CountTime_clean %>%
+    group_by(Trap_Type) %>%
+    summarise(
+      Total_Aedes_aegypti = sum(Aeae),
+      Mean_Aedes_aegypti = round(mean(Aeae), 2),
+      Median_Aedes_aegypti = round(median(Aeae), 2),
+      Total_Aedes_albopictus = sum(Aealb),
+      Mean_Aedes_albopictus = round(mean(Aealb), 2),
+      Median_Aedes_albopictus = round(median(Aealb), 2),
+      Total_Culex_quinquefasciatus = sum(Quinx),
+      Mean_Culex_quinquefasciatus = round(mean(Quinx), 2),
+      Median_Culex_quinquefasciatus = round(median(Quinx), 2),
+      Total_Culex_nigripalpus = sum(Cxn),
+      Mean_Culex_nigripalpus = round(mean(Cxn), 2),
+      Median_Culex_nigripalpus = round(median(Cxn), 2),
+      Total_Aedes_mediovittatus = sum(Aem),
+      Mean_Aedes_mediovittatus = round(mean(Aem), 2),
+      Median_Aedes_mediovittatus = round(median(Aem), 2),
+      Total_Psorophora_columbiae = sum(Psc),
+      Mean_Psorophora_columbiae = round(mean(Psc), 2),
+      Median_Psorophora_columbiae = round(median(Psc), 2),
+      Total_All_Species = sum(Total_Counts),
+      Mean_All_Species = round(mean(Total_Counts), 2),
+      Median_All_Species = round(median(Total_Counts), 2)
+    ) %>%
+    pivot_longer(cols = -Trap_Type, names_to = "Species_Metric", values_to = "Value") %>%
+    separate(Species_Metric, into = c("Metric", "Species"), sep = "_", extra = "merge") %>%
+    pivot_wider(names_from = c(Trap_Type, Metric), values_from = Value)
+  
+  # Calculate overall totals, means, and medians across all trap types for each species
+  total_row <- Haiti_CountTime_clean %>%
+    summarise(
+      Species = "All Species",
+      Total_Aedes_aegypti = sum(Aeae),
+      Mean_Aedes_aegypti = round(mean(Aeae), 2),
+      Median_Aedes_aegypti = round(median(Aeae), 2),
+      Total_Aedes_albopictus = sum(Aealb),
+      Mean_Aedes_albopictus = round(mean(Aealb), 2),
+      Median_Aedes_albopictus = round(median(Aealb), 2),
+      Total_Culex_quinquefasciatus = sum(Quinx),
+      Mean_Culex_quinquefasciatus = round(mean(Quinx), 2),
+      Median_Culex_quinquefasciatus = round(median(Quinx), 2),
+      Total_Culex_nigripalpus = sum(Cxn),
+      Mean_Culex_nigripalpus = round(mean(Cxn), 2),
+      Median_Culex_nigripalpus = round(median(Cxn), 2),
+      Total_Aedes_mediovittatus = sum(Aem),
+      Mean_Aedes_mediovittatus = round(mean(Aem), 2),
+      Median_Aedes_mediovittatus = round(median(Aem), 2),
+      Total_Psorophora_columbiae = sum(Psc),
+      Mean_Psorophora_columbiae = round(mean(Psc), 2),
+      Median_Psorophora_columbiae = round(median(Psc), 2),
+      Total_All_Species = sum(Total_Counts),
+      Mean_All_Species = round(mean(Total_Counts), 2),
+      Median_All_Species = round(median(Total_Counts), 2)
+    ) %>%
+    pivot_longer(cols = -Species, names_to = "Metric_Species", values_to = "Value") %>%
+    separate(Metric_Species, into = c("Metric", "Species"), sep = "_", extra = "merge") %>%
+    pivot_wider(names_from = Metric, values_from = Value)
+  
+  # Combine summary table with total row
+  final_table <- bind_rows(summary_table, total_row)
+  
+  # Create a beautiful table with species as rows and trap types as columns
+  kable(final_table, format = "html", escape = FALSE, col.names = c(
+    "Species",
+    rep(c("Total", "Mean", "Median"), times = 4)  # Adjusted to 4 for three trap types + overall
+  )) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  full_width = F) %>%
+    add_header_above(c(" " = 1, 
+                       "BG Sentinel" = 3, 
+                       "CDC Light Trap" = 3, 
+                       "Gravid Trap" = 3,
+                       "Total" = 3)) %>%
+    row_spec(nrow(final_table), bold = TRUE, background = "lightgray") %>%
+    column_spec(1, bold = TRUE, italic = TRUE)
+
+```
+
+
+
+```{r Code for hurdle models}
+
+  # Fit the global hurdle models
+    Glob.Hurd.Aeae <- pscl::hurdle(
+      Aeae ~ Precip + TMean + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Aeae, 
+      dist = "negbin"
+    )
+  
+    Glob.Hurd.Aealb <- hurdle(
+      Aealb ~ Precip + TMean  + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Aealb, 
+      dist = "negbin"
+    )  
+  
+    Glob.Hurd.Quinx <- hurdle(
+      Quinx ~ Precip + TMean + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Cxq, 
+      dist = "negbin"
+    )
+  
+    Glob.Hurd.Cxn <- hurdle(
+      Cxn ~ Precip + TMean  + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Cxn, 
+      dist = "negbin"
+    )
+
+    Glob.Hurd.Aem <- hurdle(
+      Aem ~ Precip + TMean  + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Aem, 
+      dist = "negbin"
+    )
+  
+    Glob.Hurd.Psc <- hurdle(
+      Psc ~ Precip + TMean  + nightlight + Elevation | Precip + TMean + nightlight + Elevation, 
+      data = HCM_Full_Psc, 
+      dist = "negbin"
+    )    
+      
+  # Prepare for dredging
+    options(na.action = "na.fail")
+  
+  # Create a cluster for parallel processing
+    cl <- makeCluster(detectCores() - 1)
+    clusterEvalQ(cl, {
+      library(MuMIn)
+      library(countreg)
+      library(sp)
+      library(parallel)
+    })
+    
+    clusterExport(cl, list("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq", "HCM_Full_Aem", "HCM_Full_Cxn", "HCM_Full_Psc", 
+                           "Glob.Hurd.Aeae", "Glob.Hurd.Aealb", "Glob.Hurd.Quinx", "Glob.Hurd.Cxn", "Glob.Hurd.Aem", "Glob.Hurd.Psc"))
+  
+
+  # Perform the dredge operation, excluding models with both count_Precip and count_TMean
+    Dredge.Aeae <- dredge(Glob.Hurd.Aeae, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)
+    Dredge.Aealb <- dredge(Glob.Hurd.Aealb, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)
+    Dredge.Quinx <- dredge(Glob.Hurd.Quinx, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)
+    Dredge.Cxn <- dredge(Glob.Hurd.Cxn, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)
+    Dredge.Aem <- dredge(Glob.Hurd.Aem, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)
+    Dredge.Psc <- dredge(Glob.Hurd.Psc, subset = !(count_Precip & count_TMean) & !(zero_Precip & zero_TMean), cluster = "cl", trace = TRUE)  
+    
+  # Stop the cluster after dredging
+    stopCluster(cl)
+  
+  # Reset the NA action to omit missing values
+    options(na.action = "na.omit")
+  
+  # "Best" Aeae Model
+    Aeae_Top10 <- get.models(Dredge.Aeae, subset = 1:10)
+    View(Aeae_Top10)
+  
+  # "Best" Aealb Model
+    Aealb_Top10 <- get.models(Dredge.Aealb, subset = 1:10)
+    View(Aealb_Top10)
+  
+  # "Best" Quinx Model
+    Quinx_Top10 <- get.models(Dredge.Quinx, subset = 1:10)
+    View(Quinx_Top10)
+  
+  # "Best" Cxn Model
+    Cxn_Top10 <- get.models(Dredge.Cxn, subset = 1:10)
+    View(Cxn_Top10)
+  
+  # "Best" Aem Model
+    Aem_Top10 <- get.models(Dredge.Aem, subset = 1:10)
+    View(Aem_Top10)
+  
+  # "Best" Psc Model
+    Psc_Top10 <- get.models(Dredge.Psc, subset = 1:10)
+    View(Psc_Top10)
+  
+  # Extract the "best" model for each species
+    Best.Aeae <- get.models(Dredge.Aeae, subset = 1)[[1]]
+    Best.Aealb <- get.models(Dredge.Aealb, subset = 1)[[1]]
+    Best.Quinx <- get.models(Dredge.Quinx, subset = 1)[[1]]
+    Best.Cxn <- get.models(Dredge.Cxn, subset = 1)[[1]]
+    Best.Aem <- get.models(Dredge.Aem, subset = 1)[[1]]
+    Best.Psc <- get.models(Dredge.Psc, subset = 1)[[1]]
+    
+  # Summarize the "best" models for each species
+    summary(Best.Aeae)
+    summary(Best.Aealb)
+    summary(Best.Quinx)
+    summary(Best.Aem)
+    summary(Best.Cxn)
+    summary(Best.Psc)
+
+
+  # Aedes aegypti Model
+    Best.Aeae <- pscl::hurdle(
+      Aeae ~ Elevation + nightlight + Precip | Elevation + nightlight + Precip, 
+      data = HCM_Full_Aeae, 
+      dist = "negbin"
+    )
+
+  # Aedes albopictus Model
+    Best.Aealb <- pscl::hurdle(
+      Aealb ~ Elevation + nightlight + Precip | Elevation + nightlight + TMean, 
+      data = HCM_Full_Aealb, 
+      dist = "negbin"
+    )
+
+  # Culex quinquefasciatus Model
+    Best.Quinx <- pscl::hurdle(
+      Quinx ~ TMean | Elevation + nightlight + Precip, 
+      data = HCM_Full_Cxq, 
+      dist = "negbin"
+    )
+
+  # Culex nigripalpus Model
+    Best.Cxn <- pscl::hurdle(
+      Cxn ~ Precip | Elevation + nightlight + Precip, 
+      data = HCM_Full_Cxn, 
+      dist = "negbin"
+    )    
+      
+  # Aedes mediovittatus Model
+    Best.Aem <- pscl::hurdle(
+      Aem ~ Precip | Elevation + nightlight, 
+      data = HCM_Full_Aem, 
+      dist = "negbin"
+    )  
+    
+  # Psorophora columbiae Model      
+    Best.Psc <- pscl::hurdle(
+      Psc ~ Elevation + nightlight + TMean | TMean + nightlight + Elevation, 
+      data = HCM_Full_Psc, 
+      dist = "negbin"
+    )  
+
+
+```
+
+
+
+```{r Code for predictions}
+
+  ##### A note about the prediction code #####
+  # The rasters for the predictions are available as cited in the manuscript
+    # and can be downloaded from those sources. They are not stored in Github
+    # for space constraints - the code below requires they be loaded in first;
+    # additional code to load them in or that was used to process them can be
+    # provided upon request to ian.smith.gh@gmail.com OR ianpsheasmith@ufl.edu
+
+
+  # Define the models
+  
+    # Aedes aegypti Model
+      Best.Aeae <- pscl::hurdle(
+        Aeae ~ Elevation + nightlight + Precip | Elevation + nightlight + Precip, 
+        data = HCM_Full_Aeae, 
+        dist = "negbin"
+      )
+  
+    # Aedes albopictus Model
+      Best.Aealb <- pscl::hurdle(
+        Aealb ~ Elevation + nightlight + Precip | Elevation + nightlight + TMean, 
+        data = HCM_Full_Aealb, 
+        dist = "negbin"
+      )
+  
+    # Culex quinquefasciatus Model
+      Best.Quinx <- pscl::hurdle(
+        Quinx ~ TMean | Elevation + nightlight + Precip, 
+        data = HCM_Full_Cxq, 
+        dist = "negbin"
+      )
+  
+    # Culex nigripalpus Model
+      Best.Cxn <- pscl::hurdle(
+        Cxn ~ Precip | Elevation + nightlight + Precip, 
+        data = HCM_Full_Cxn, 
+        dist = "negbin"
+      )    
+        
+    # Aedes mediovittatus Model
+      Best.Aem <- pscl::hurdle(
+        Aem ~ Precip | Elevation + nightlight, 
+        data = HCM_Full_Aem, 
+        dist = "negbin"
+      )  
+      
+    # Psorophora columbiae Model      
+      Best.Psc <- pscl::hurdle(
+        Psc ~ Elevation + nightlight + TMean | TMean + nightlight + Elevation, 
+        data = HCM_Full_Psc, 
+        dist = "negbin"
+      )   
+      
+    # Define the monthly raster stacks
+      monthly_raster_stacks <- list(
+        Jan = raster_stack_Jan,
+        Feb = raster_stack_Feb,
+        Mar = raster_stack_Mar,
+        Apr = raster_stack_Apr,
+        May = raster_stack_May,
+        Jun = raster_stack_Jun,
+        Jul = raster_stack_Jul,
+        Aug = raster_stack_Aug,
+        Sep = raster_stack_Sep,
+        Oct = raster_stack_Oct,
+        Nov = raster_stack_Nov,
+        Dec = raster_stack_Dec
+      )
+  
+    # Initialize lists to store predictions
+      Aeae_Pres_preds <- list()
+      Aeae_Hurdle_preds <- list()
+      Aealb_Pres_preds <- list()
+      Aealb_Hurdle_preds <- list()
+      Quinx_Pres_preds <- list()
+      Quinx_Hurdle_preds <- list()
+      Cxn_Pres_preds <- list()
+      Cxn_Hurdle_preds <- list()
+      #Aem_Pres_preds <- list()
+      #Aem_Hurdle_preds <- list()      
+      #Psc_Pres_preds <- list()
+      #Psc_Hurdle_preds <- list()
+      
+    # Zero Model prediction
+      predict_zero_model <- function(model, raster_stack) {
+        presence_pred <- raster::predict(raster_stack, model, type = "zero")
+      }
+      
+    # Count Model prediction
+      predict_count_model <- function(model, raster_stack) {
+        raster::predict(raster_stack, model, type = "response")
+      }
+  
+        
+    # Loop through each month to perform predictions
+      for (month in names(monthly_raster_stacks)) {
+        raster_stack <- monthly_raster_stacks[[month]]
+        
+        # Perform predictions for Aedes aegypti
+        Aeae_Pres_preds[[month]] <- predict_zero_model(Best.Aeae, raster_stack)
+        Aeae_Hurdle_preds[[month]] <- predict_count_model(Best.Aeae, raster_stack)
+        
+        # Perform predictions for Aedes albopictus
+        Aealb_Pres_preds[[month]] <- predict_zero_model(Best.Aealb, raster_stack)
+        Aealb_Hurdle_preds[[month]] <- predict_count_model(Best.Aealb, raster_stack)
+        
+        # Perform predictions for Culex quinquefasciatus
+        Quinx_Pres_preds[[month]] <- predict_zero_model(Best.Quinx, raster_stack)
+        Quinx_Hurdle_preds[[month]] <- predict_count_model(Best.Quinx, raster_stack)
+        
+        # Perform predictions for Culex nigripalpus
+        Cxn_Pres_preds[[month]] <- predict_zero_model(Best.Cxn, raster_stack)
+        Cxn_Hurdle_preds[[month]] <- predict_count_model(Best.Cxn, raster_stack)
+        
+        # Perform predictions for Aedes mediovittatus
+        #Aem_Pres_preds[[month]] <- predict_zero_model(Best.Aem, raster_stack)
+        #Aem_Hurdle_preds[[month]] <- predict_count_model(Best.Aem, raster_stack)
+        
+        # Perform predictions for Psorophora columbiae
+        #Psc_Pres_preds[[month]] <- predict_zero_model(Best.Psc, raster_stack)
+        #Psc_Hurdle_preds[[month]] <- predict_count_model(Best.Psc, raster_stack)
+      }
+  
+    # Plot predictions for each month
+      plot_predictions <- function(predictions, title_prefix) {
+        for (month in names(predictions)) {
+          plot_minimal(predictions[[month]])
+          title(main = paste0(title_prefix, " - ", month))
+        }
+      }
+  
+    # Plot Aedes aegypti predictions
+      plot_predictions(Aeae_Pres_preds, "Aedes aegypti Presence Prediction")
+      plot_predictions(Aeae_Hurdle_preds, "Aedes aegypti Hurdle Prediction")
+    
+    # Plot Aedes albopictus predictions
+      plot_predictions(Aealb_Pres_preds, "Aedes albopictus Presence Prediction")
+      plot_predictions(Aealb_Hurdle_preds, "Aedes albopictus Hurdle Prediction")
+    
+    # Plot Culex quinquefasciatus predictions
+      plot_predictions(Quinx_Pres_preds, "Culex quinquefasciatus Presence Prediction")
+      plot_predictions(Quinx_Hurdle_preds, "Culex quinquefasciatus Hurdle Prediction")
+
+    # Plot Culex nigripalpus predictions
+      plot_predictions(Cxn_Pres_preds, "Culex nigripalpus Presence Prediction")
+      plot_predictions(Cxn_Hurdle_preds, "Culex nigripalpus Hurdle Prediction")      
+
+    # Plot Aedes albopictus predictions
+      #plot_predictions(Aem_Pres_preds, "Aedes mediovittatus Presence Prediction")
+      #plot_predictions(Aem_Hurdle_preds, "Aedes mediovittatus Hurdle Prediction")
+    
+    # Plot Culex quinquefasciatus predictions
+      #plot_predictions(Psc_Pres_preds, "Culex quinquefasciatus Presence Prediction")
+      #plot_predictions(Psc_Hurdle_preds, "Psorophora columbiae Hurdle Prediction")
+
+```
+
+
