@@ -10,7 +10,7 @@ This repository contains data and code associated with a spatial modeling study 
   - Daily mosquito count data
   - Latitude and longitude coordinates of trap locations
   - Matched environmental covariate data extracted using species-specific buffer radii  
-  The covariates include climatic, ecological, and anthropogenic factors aligned with the temporal resolution of trapping events.
+  The covariates include ecological factors aligned with the spatiotemporal resolution of trapping events.
 
 - **Modeling and Figure Code (.Rmd file)**  
   The `.Rmd` file contains all code used to:
@@ -33,7 +33,7 @@ The following six species are included in this study:
 3. *Culex quinquefasciatus*
 4. *Culex nigripalpus*
 5. *Aedes mediovittatus*
-6. *Psorophora spp.*
+6. *Psorophora columbiae*
 
 ## Usage Instructions
 
