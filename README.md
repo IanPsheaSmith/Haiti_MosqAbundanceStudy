@@ -56,4 +56,4 @@ This project is licensed under the [MIT License](LICENSE) — feel free to use, 
 For questions or collaborations, please contact:  
 **Ian Pshea-Smith**  
 University of Florida  
-Email: [your-email@domain.edu]
+Email: [ianpsheasmith@ufl.edu]
