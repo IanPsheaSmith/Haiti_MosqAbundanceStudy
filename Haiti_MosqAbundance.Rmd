@@ -19,7 +19,6 @@ output: html_document
   library(patchwork)
   library(parallel)
   library(sp)
-  library(countreg)
   library(gstat)
   library(MuMIn)
   library(parallel)
@@ -46,8 +45,8 @@ output: html_document
     # already extracted from Bioclim & WorldPop.
 
   # Define GitHub base URL for raw files
-    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/Datasets/"
-  
+    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/"
+
   # Define dataset names
     datasets <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq", 
                   "HCM_Full_Aem", "HCM_Full_Cxn", "HCM_Full_Psc")
@@ -70,14 +69,126 @@ output: html_document
 
   # Test for Aeae
     head(HCM_Full_Aeae)
-    
 
-  ##### A note about these datasets #####
-  # Each dataset contains the counts for the other species. Of note, the values
-    # for each covariate differ, as we employed different sized buffers to 
-    # extract them depending on the target species (see the manuscript). We 
-    # included the counts of each species in case we wanted to employ a multi-
-    # species distribution model, which was not performed.
+  # Download Shapefiles for the map(s)
+    zip_url <- "https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Haiti_Shapefiles.zip"
+    zip_dest <- tempfile(fileext = ".zip")
+    unzip_dir <- tempfile()
+    download.file(zip_url, destfile = zip_dest, mode = "wb")
+    unzip(zip_dest, exdir = unzip_dir)
+
+  # read in the shapefiles
+    all_files <- list.files(unzip_dir, recursive = TRUE, full.names = TRUE)
+    adm2_path <- all_files[grepl("adm2.*\\.shp$", all_files)]
+    adm3_path <- all_files[grepl("adm3.*\\.shp$", all_files)]
+    Haiti_adm2 <- st_read(adm2_path)
+    Haiti_adm3 <- st_read(adm3_path)
+
+```
+
+```{r Figure 1 - Study Area Map}
+
+# Convert HCM_Full_Aeae to sf object
+  HCM_Full_Aeae_sf <- st_as_sf(HCM_Full_Aeae,
+                                coords = c("Longitude", "Latitude"),
+                                crs = 4326)
+  
+  # Identify the ADM2 polygons (communes) that contain sample points
+  adm2_flagged <- Haiti_adm2[
+    lengths(st_intersects(Haiti_adm2, HCM_Full_Aeae_sf)) > 0,
+  ]
+  
+  # Plot all communes in light grey
+  Haiti_StudySiteCommunes <- ggplot() +
+    # all communes (ADM2) in light grey
+    geom_sf(
+      data  = Haiti_adm2,
+      fill  = "white",
+      color = "grey",
+      size  = 0.05
+    ) +
+    # communes intersecting sample points
+    geom_sf(
+      data  = adm2_flagged,
+      fill  = "grey",
+      color = "black",
+      size  = 0.05
+    ) +
+    theme_minimal() +
+    labs(
+      title = "",
+      x     = "",
+      y     = ""
+    )
+  
+  # Count observations per location
+  HCM_counts <- HCM_Full_Aeae %>%
+    group_by(Latitude, Longitude) %>%
+    summarise(n_obs = n(), .groups = "drop") %>%
+    st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326)
+  
+  # Plot the study sites alone with graduated points
+  Haiti_StudySite <- ggplot() +
+    geom_sf(
+      data  = adm2_flagged,
+      fill  = "white",
+      color = "black",
+      size  = 0.05
+    ) +
+    geom_sf(
+      data = HCM_counts,
+      aes(size = n_obs),
+      alpha = 0.6,
+      color = "#7851A9"
+    ) +
+    scale_size_continuous(name = "# Observations") +
+    theme_minimal()
+  
+  # Print the figures
+  print(Haiti_StudySiteCommunes)
+  print(Haiti_StudySite)
+
+```
+
+
+
+```{r Interactive Map of Data}
+
+  # Aggregate data by location with species counts
+    HCM_map_data <- HCM_Full_Aeae %>%
+      group_by(Latitude, Longitude) %>%
+      summarise(
+        n_obs = n(),
+        Quinx = sum(Quinx, na.rm = TRUE),
+        Aeae = sum(Aeae, na.rm = TRUE),
+        Aealb = sum(Aealb, na.rm = TRUE),
+        Aem = sum(Aem, na.rm = TRUE),
+        Cxn = sum(Cxn, na.rm = TRUE),
+        Psc = sum(Psc, na.rm = TRUE),
+        .groups = "drop"
+      )
+  
+  # Create leaflet map
+    leaflet(HCM_map_data) %>%
+      addTiles(group = "OpenStreetMap") %>%
+      addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
+      addProviderTiles("Esri.WorldShadedRelief", group = "Elevation") %>%
+      addCircleMarkers(
+        lng = ~Longitude,
+        lat = ~Latitude,
+        radius = ~sqrt(n_obs) * 2,
+        popup = ~paste0("Collection Events: ", n_obs, "<br>",
+                        "<i>Cx. quinquefasciatus</i>: ", Quinx, "<br>",
+                        "<i>Ae. aegypti</i>: ", Aeae, "<br>",
+                        "<i>Ae. albopictus</i>: ", Aealb, "<br>",
+                        "<i>Ae. mediovittatus</i>: ", Aem, "<br>",
+                        "<i>Cx. nigripalpus</i>: ", Cxn, "<br>",
+                        "<i>Ps. columbiae</i>: ", Psc)
+      ) %>%
+      addLayersControl(
+        baseGroups = c("OpenStreetMap", "Satellite", "Elevation"),
+        options = layersControlOptions(collapsed = FALSE)
+      )
 
 ```
 
@@ -654,12 +765,12 @@ output: html_document
       plot_predictions(Cxn_Pres_preds, "Culex nigripalpus Presence Prediction")
       plot_predictions(Cxn_Hurdle_preds, "Culex nigripalpus Hurdle Prediction")      
 
-    # Plot Aedes albopictus predictions
+    # Plot Aedes mediovittatus predictions
       #plot_predictions(Aem_Pres_preds, "Aedes mediovittatus Presence Prediction")
       #plot_predictions(Aem_Hurdle_preds, "Aedes mediovittatus Hurdle Prediction")
     
-    # Plot Culex quinquefasciatus predictions
-      #plot_predictions(Psc_Pres_preds, "Culex quinquefasciatus Presence Prediction")
+    # Plot Psorophora columbiae predictions
+      #plot_predictions(Psc_Pres_preds, "Psorophora columbiae Presence Prediction")
       #plot_predictions(Psc_Hurdle_preds, "Psorophora columbiae Hurdle Prediction")
 
 ```
