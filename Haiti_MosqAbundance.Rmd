@@ -84,6 +84,21 @@ output: html_document
     adm3_path <- all_files[grepl("adm3.*\\.shp$", all_files)]
     Haiti_adm2 <- st_read(adm2_path)
     Haiti_adm3 <- st_read(adm3_path)
+    
+  # Base URL for raw GitHub files
+    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Rasters/"
+  
+  # Load AverageStack raster data
+    AverageStack <- stack(paste0(base_url, "AverageStack.tif"))
+  
+  # Load MonthlyStacks raster data
+    month_names <- c("January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December")
+    
+    MonthlyStacks <- list()
+    for(month in month_names) {
+      MonthlyStacks[[month]] <- stack(paste0(base_url, month, "_Stack.tif"))
+    }
 
 ```
 
