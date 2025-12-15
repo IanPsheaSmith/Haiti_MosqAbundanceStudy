@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Haiti Mosquito Abundance Study</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1 { color: #5D4E8B; border-bottom: 3px solid #8B7AB8; padding-bottom: 10px; }
+        h2 { color: #6A5ACD; margin-top: 30px; border-bottom: 2px solid #B8A3D6; padding-bottom: 5px; }
+        h3 { color: #7B68EE; margin-top: 20px; }
+        .species { font-style: italic; }
+        .folder-section {
+            background-color: #F5F3FF;
+            border-left: 4px solid #8B7AB8;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .file-list {
+            background-color: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        a {
+            color: #7B68EE;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #6A5ACD;
+        }
+        .download-btn {
+            display: inline-block;
+            background-color: #8B7AB8;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            margin: 5px 5px 5px 0;
+            font-size: 0.95em;
+        }
+        .download-btn:hover {
+            background-color: #7B68EE;
+            text-decoration: none;
+        }
+        .map-btn {
+            display: inline-block;
+            background-color: #6A5ACD;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 8px 8px 8px 0;
+            font-size: 1em;
+            font-weight: 500;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .map-btn:hover {
+            background-color: #7B68EE;
+            text-decoration: none;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .species-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .map-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+            margin: 20px 0;
+        }
+        .interactive-maps-section {
+            background-color: #F0EBFF;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Haiti Mosquito Abundance Study</h1>
+    
+    <p>This repository contains data, code, predictions, and figures associated with a spatial modeling study of mosquito abundance in Haiti. The study aims to understand the ecological and environmental drivers of six mosquito species based on species-specific environmental buffers and spatiotemporal covariates.</p>
+
+    <h2>Data and Code</h2>
+    <div class="folder-section">
+        <h3><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Data_and_Code">View Data_and_Code Folder</a></h3>
+        
+        <p><strong>Mosquito Datasets (6 CSV files):</strong></p>
+        <p>Each species-specific dataset includes date, coordinates, mosquito counts, and environmental covariates extracted using buffer zones tailored to each species' dispersal range.</p>
+        
+        <p><strong>Available files:</strong></p>
+        <ul>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Data_and_Code/[filename].csv">Species datasets</a> (temperature, precipitation, NDVI, population density, elevation, etc.)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/blob/main/Data_and_Code/Haiti_MosqAbundance.Rmd" class="download-btn">R Markdown Analysis Code</a></li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Data_and_Code/Haiti_Shapefiles.zip" class="download-btn">Download Shapefiles (.zip)</a></li>
+        </ul>
+
+        <h4><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Data_and_Code/Rasters">Raster Data</a></h4>
+        <p>Contains environmental covariate raster stacks used in the analysis:</p>
+        <ul>
+            <li>Monthly raster stacks for temporal analysis</li>
+            <li>Average monthly covariates for baseline predictions</li>
+        </ul>
+    </div>
+
+    <h2>Species Covered</h2>
+    <div class="species-grid">
+        <div><span class="species">Aedes aegypti</span> (Aeae)</div>
+        <div><span class="species">Aedes albopictus</span> (Aealb)</div>
+        <div><span class="species">Aedes mediovittatus</span> (Aem)</div>
+        <div><span class="species">Culex quinquefasciatus</span> (Quinx)</div>
+        <div><span class="species">Culex nigripalpus</span> (Cxn)</div>
+        <div><span class="species">Psorophora columbiae</span> (Psc)</div>
+    </div>
+
+    <h2>Figures and Supplemental Materials</h2>
+    <div class="folder-section">
+        <h3><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Figures">View Figures Folder</a></h3>
+        
+        <p><strong>Manuscript Figures:</strong></p>
+        <ul>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/Figure1.tif">Figure 1</a> (.tif)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/Figure2.tif">Figure 2</a> (.tif)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/Figure3.tif">Figure 3</a> (.tif)</li>
+        </ul>
+        
+        <p><strong>Supplemental Materials:</strong></p>
+        <ul>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/S1.pdf">Supplemental Figure S1</a> (.pdf)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/S2.pdf">Supplemental Figure S2</a> (.pdf)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/S3.csv">Supplemental Table S3</a> (.csv)</li>
+            <li><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Figures/S4.pdf">Supplemental Figure S4</a> (.pdf)</li>
+        </ul>
+    </div>
+
+    <h2>Spatial Predictions</h2>
+    <div class="folder-section">
+        <h3><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions">View Predictions Folder</a></h3>
+
+        <h4><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline">Baseline Predictions</a></h4>
+        <p>Annual average predictions for each species (11 files per species):</p>
+        <ul>
+            <li><strong>Abundance predictions:</strong> Mean, SD, Upper/Lower 95% CI</li>
+            <li><strong>Presence predictions:</strong> Mean, SD, Upper/Lower 95%, Agreement</li>
+            <li><strong>Combined Mean prediction</strong></li>
+        </ul>
+        
+        <p><strong>Access by species:</strong></p>
+        <div class="species-grid">
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Aeae" class="download-btn"><span class="species">Aedes aegypti</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Aealb" class="download-btn"><span class="species">Aedes albopictus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Aem" class="download-btn"><span class="species">Aedes mediovittatus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Quinx" class="download-btn"><span class="species">Culex quinquefasciatus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Csn" class="download-btn"><span class="species">Culex nigripalpus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/Psc" class="download-btn"><span class="species">Psorophora columbiae</span></a>
+        </div>
+
+        <p><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Baseline/SVGs"><strong>Vector Graphics:</strong></a> PNG and SVG versions of mean abundance and presence maps (24 files)</p>
+
+        <h4><a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly">Monthly Predictions</a></h4>
+        <p>Month-specific predictions (Abundance, Presence, and Presence SD for each month):</p>
+        <div class="species-grid">
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Aeae" class="download-btn"><span class="species">Aedes aegypti</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Aealb" class="download-btn"><span class="species">Aedes albopictus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Aem" class="download-btn"><span class="species">Aedes mediovittatus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Quinx" class="download-btn"><span class="species">Culex quinquefasciatus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Csn" class="download-btn"><span class="species">Culex nigripalpus</span></a>
+            <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Monthly/Psc" class="download-btn"><span class="species">Psorophora columbiae</span></a>
+        </div>
+    </div>
+
+    <h2>Interactive Maps</h2>
+    <div class="interactive-maps-section">
+        <p>Explore species-specific predictions through interactive web maps. Click on any species below to view the interactive visualization:</p>
+        <div class="map-grid">
+            <a href="https://ianpsheasmith.github.io/H_Count/AeaeMap.html" class="map-btn" target="_blank"><span class="species">Aedes aegypti</span></a>
+            <a href="https://ianpsheasmith.github.io/H_Count/AealbMap.html" class="map-btn" target="_blank"><span class="species">Aedes albopictus</span></a>
+            <a href="https://ianpsheasmith.github.io/H_Count/AemMap.html" class="map-btn" target="_blank"><span class="species">Aedes mediovittatus</span></a>
+            <a href="https://ianpsheasmith.github.io/H_Count/QuinxMap.html" class="map-btn" target="_blank"><span class="species">Culex quinquefasciatus</span></a>
+            <a href="https://ianpsheasmith.github.io/H_Count/CxnMap.html" class="map-btn" target="_blank"><span class="species">Culex nigripalpus</span></a>
+            <a href="https://ianpsheasmith.github.io/H_Count/PscMap.html" class="map-btn" target="_blank"><span class="species">Psorophora columbiae</span></a>
+        </div>
+        <p><small>HTML files are also available for <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/tree/main/Predictions/Interactive_Maps">download from the repository</a>.</small></p>
+    </div>
+
+    <h2>Usage Instructions</h2>
+    <ol>
+        <li>Clone the repository:
+            <pre><code>git clone https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy.git</code></pre>
+        </li>
+        <li>Open <code>Haiti_MosqAbundance.Rmd</code> in RStudio</li>
+        <li>Install required R packages (listed at the top of the .Rmd file)</li>
+        <li>Knit the document to reproduce model outputs and figures</li>
+    </ol>
+
+    <h2>Citation</h2>
+    <p>If you use this code or data, please cite the associated manuscript:</p>
+    <blockquote>
+        <em>[Manuscript Citation Placeholder ??? update with DOI or full citation when available]</em>
+    </blockquote>
+
+    <h2>Contact</h2>
+    <p>For questions, please contact:<br>
+    <strong>Ian Pshea-Smith</strong><br>
+    Email: <a href="mailto:ismithgh@umich.edu">ismithgh@umich.edu</a></p>
+
+    <hr style="margin-top: 40px; border: none; border-top: 2px solid #DCD0FF;">
+    <p style="text-align: center; color: #7f8c8d; font-size: 0.9em;">
+        <a href="https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy">View on GitHub</a> | 
+        Last updated: December 2025
+    </p>
+</body>
+</html>
