@@ -33,14 +33,14 @@ This repository contains all data, code, predictions, and figures associated wit
 
 ## Species Studied
 
-| Species | Abbreviation | Medical Importance |
-|---------|--------------|-------------------|
-| *Aedes aegypti* | Aeae | Primary dengue, Zika, chikungunya vector |
-| *Aedes albopictus* | Aealb | Secondary arbovirus vector |
-| *Aedes mediovittatus* | Aem | Potential arbovirus vector |
-| *Culex quinquefasciatus* | Quinx | West Nile virus vector |
-| *Culex nigripalpus* | Cxn | Eastern equine encephalitis vector |
-| *Psorophora columbiae* | Psc | Potential arbovirus vector |
+| Species | Abbreviation |
+|---------|--------------|
+| *Aedes aegypti* | Aeae |
+| *Aedes albopictus* | Aealb |
+| *Aedes mediovittatus* | Aem |
+| *Culex quinquefasciatus* | Quinx |
+| *Culex nigripalpus* | Cxn |
+| *Psorophora columbiae* | Psc |
 
 ## Repository Structure
 
