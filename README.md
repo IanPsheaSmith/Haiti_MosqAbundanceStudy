@@ -270,9 +270,9 @@ Please use the [GitHub Issues](https://github.com/IanPsheaSmith/Haiti_MosqAbunda
 
 ## Acknowledgments
 
-###Funding
+### Funding
 - This work was funded by the Armed Forces Health Surveillance Branch (AFHSB), Global Emerging Infections Surveillance (GEIS) Section, under ProMIS ID (P0154_24_EC and P0118-24-RD). The funders had no role in study design, data collection and analysis, decision to publish, or preparation of the manuscript.
-###Disclaimer
+### Disclaimer
 - The use of either trade or manufacturers’ names in this report does not constitute an official endorsement of any commercial products. This report may not be cited for purposes of advertisement. The opinions, interpretations, conclusions, recommendations and views in this publication are those of the authors and do not necessarily reflect the official policy or position of the Uniformed Services University of the Health Sciences, Department of the Army, Department of the Navy, Department of Defense, nor the U. S. Government. Multiple authors are military service members of the U.S. Government. This work was prepared as part of their official duties. Title 17, U.S.C., §105 provides that copyright protection under this title is not available for any work of the U.S. Government. Title 17, U.S.C., §101 defines a U.S. Government work as a work prepared by a military Service member or employee of the U.S. Government as part of that person’s official duties.
 
 
