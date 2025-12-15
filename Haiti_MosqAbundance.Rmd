@@ -88,17 +88,27 @@ output: html_document
   # Base URL for raw GitHub files
     base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Rasters/"
   
+  # Set Layer Names
+    layer_names <- c("Precip", "TMean", "WindMean", "Elevation", "LC_trees", 
+                 "LC_shrubs", "LC_grassland", "LC_cropland", "LC_built")
+
+    
   # Load AverageStack raster data
     AverageStack <- stack(paste0(base_url, "AverageStack.tif"))
-  
+    names(AverageStack) <- layer_names
+    
   # Load MonthlyStacks raster data
     month_names <- c("January", "February", "March", "April", "May", "June",
                      "July", "August", "September", "October", "November", "December")
     
-    MonthlyStacks <- list()
-    for(month in month_names) {
-      MonthlyStacks[[month]] <- stack(paste0(base_url, month, "_Stack.tif"))
-    }
+  MonthlyStacks <- setNames(
+    lapply(month_names, function(month) {
+      stack_obj <- stack(paste0(base_url, month, "_Stack.tif"))
+      names(stack_obj) <- layer_names
+      stack_obj
+    }),
+    month_names
+  )
 
 ```
 
@@ -528,6 +538,12 @@ output: html_document
 
 
 ```{r Code for boosted regression trees}
+# =============================================================================
+# BOOTSTRAP BRT MODELING FOR ROBUST UNCERTAINTY ESTIMATION
+# =============================================================================
+# 100 bootstrap replicates for permutation-based model metrics
+# Provides true prediction uncertainty with 95% confidence intervals
+# =============================================================================
 
 library(pROC)
 library(caret)
@@ -537,15 +553,8 @@ library(dismo)
 library(gbm)
 library(parallel)
 
-# =============================================================================
-# BOOTSTRAP BRT MODELING FOR ROBUST UNCERTAINTY ESTIMATION
-# =============================================================================
-# Fits multiple BRT models on bootstrap samples to assess model consensus
-# Provides true prediction uncertainty, not approximations
-# =============================================================================
-
 cat("\n=======================================================================\n")
-cat("  BOOTSTRAP BRT MODELING SYSTEM\n")
+cat("  BOOTSTRAP BRT MODELING SYSTEM (100 REPLICATES)\n")
 cat("  For Robust Uncertainty Estimation\n")
 cat("=======================================================================\n\n")
 
@@ -553,22 +562,14 @@ cat("=======================================================================\n\n
 # Configuration
 # ---------------------------
 
-# Base covariates (adjust based on your choice)
 base_covariates <- c("Precip", "TMean", "WindMean", "Elevation")
-
-# Land cover variables (set to empty vector if not using)
 all_lc_variables <- c("LC_trees", "LC_shrubs", "LC_grassland", "LC_cropland", 
                       "LC_wetland", "LC_built")
 
-# Number of bootstrap iterations (recommend 25-100)
-# More = better uncertainty estimates but slower
-n_bootstrap <- 50  # Good balance of speed and accuracy
-
-# Use parallel processing?
+n_bootstrap <- 100
 use_parallel <- TRUE
-n_cores <- detectCores() - 4  # Leave four cores free
+n_cores <- max(1, floor(parallel::detectCores() * 2/3))
 
-# Define species and their datasets
 species_list <- c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc")
 dataset_names <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq",
                    "HCM_Full_Aem", "HCM_Full_Cxn", "HCM_Full_Psc")
@@ -576,10 +577,7 @@ dataset_names <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq",
 cat("Bootstrap settings:\n")
 cat("  Iterations:", n_bootstrap, "\n")
 cat("  Parallel processing:", use_parallel, "\n")
-if (use_parallel) {
-  cat("  Cores:", n_cores, "\n")
-}
-cat("\n")
+cat("  Cores:", n_cores, "(2/3 of", parallel::detectCores(), "available)\n\n")
 
 # ---------------------------
 # Helper Functions
@@ -595,9 +593,16 @@ get_covariates_for_dataset <- function(dataset_name, stack_name = "AverageStack_
   df <- get(dataset_name, envir = .GlobalEnv)
   dataset_vars <- names(df)
   
-  stack <- get(stack_name, envir = .GlobalEnv)
-  stack_vars <- names(stack)
+  stack <- tryCatch(
+    get(stack_name, envir = .GlobalEnv),
+    error = function(e) NULL
+  )
   
+  if (is.null(stack)) {
+    return(intersect(c(base_covariates, all_lc_variables), dataset_vars))
+  }
+  
+  stack_vars <- names(stack)
   dataset_lc <- intersect(all_lc_variables, dataset_vars)
   stack_lc <- intersect(all_lc_variables, stack_vars)
   usable_lc <- intersect(dataset_lc, stack_lc)
@@ -610,33 +615,33 @@ get_covariates_for_dataset <- function(dataset_name, stack_name = "AverageStack_
 }
 
 # =============================================================================
-# SINGLE BOOTSTRAP ITERATION
+# SINGLE BOOTSTRAP ITERATION WITH METRICS
 # =============================================================================
 
 fit_single_bootstrap_brt <- function(species, dataset, covariates, 
-                                    iteration, family = "bernoulli") {
+                                     iteration, family = "bernoulli") {
   
-  # Prepare data based on family
   if (family == "bernoulli") {
     data_full <- dataset %>%
-      mutate(SpeciesBin = ifelse(.data[[species]] >= 1, 1, 0)) %>%
-      dplyr::select(SpeciesBin, all_of(covariates)) %>%
+      dplyr::mutate(SpeciesBin = ifelse(.data[[species]] >= 1, 1, 0)) %>%
+      dplyr::select(SpeciesBin, dplyr::all_of(covariates)) %>%
       na.omit()
     response_var <- "SpeciesBin"
-  } else {  # poisson
+  } else {
     data_full <- dataset %>%
-      filter(.data[[species]] >= 1) %>%
-      dplyr::select(all_of(species), all_of(covariates)) %>%
+      dplyr::filter(.data[[species]] >= 1) %>%
+      dplyr::select(dplyr::all_of(species), dplyr::all_of(covariates)) %>%
       na.omit()
     response_var <- species
   }
   
-  # Bootstrap sample (with replacement)
   n <- nrow(data_full)
   boot_indices <- sample(1:n, size = n, replace = TRUE)
-  data_boot <- data_full[boot_indices, ]
+  oob_indices <- setdiff(1:n, unique(boot_indices))
   
-  # Determine tree complexity
+  data_boot <- data_full[boot_indices, ]
+  data_oob <- if (length(oob_indices) > 10) data_full[oob_indices, ] else NULL
+  
   if (family == "bernoulli") {
     n_present <- sum(data_boot[[response_var]] == 1)
   } else {
@@ -644,7 +649,6 @@ fit_single_bootstrap_brt <- function(species, dataset, covariates,
   }
   tree_comp <- get_tree_complexity(n_present)
   
-  # Fit model
   model <- tryCatch({
     gbm.step(
       data = data_boot,
@@ -659,7 +663,53 @@ fit_single_bootstrap_brt <- function(species, dataset, covariates,
     )
   }, error = function(e) NULL)
   
-  return(model)
+  if (is.null(model)) return(NULL)
+  
+  # Calculate OOB metrics
+  oob_metrics <- NULL
+  if (!is.null(data_oob) && nrow(data_oob) > 10) {
+    oob_pred <- predict(model, data_oob, n.trees = model$gbm.call$best.trees, type = "response")
+    
+    if (family == "bernoulli") {
+      oob_actual <- data_oob[[response_var]]
+      if (length(unique(oob_actual)) == 2) {
+        roc_obj <- tryCatch(pROC::roc(oob_actual, oob_pred, quiet = TRUE), error = function(e) NULL)
+        if (!is.null(roc_obj)) {
+          oob_auc <- as.numeric(pROC::auc(roc_obj))
+          coords_best <- pROC::coords(roc_obj, "best", best.method = "youden")
+          threshold <- as.numeric(coords_best$threshold[1])
+          sens <- as.numeric(coords_best$sensitivity[1])
+          spec <- as.numeric(coords_best$specificity[1])
+          
+          pred_class <- ifelse(oob_pred >= threshold, 1, 0)
+          accuracy <- mean(pred_class == oob_actual)
+          
+          oob_metrics <- list(
+            auc = oob_auc,
+            threshold = threshold,
+            sensitivity = sens,
+            specificity = spec,
+            accuracy = accuracy
+          )
+        }
+      }
+    } else {
+      oob_actual <- data_oob[[response_var]]
+      oob_metrics <- list(
+        correlation = cor(oob_actual, oob_pred, use = "complete.obs"),
+        rmse = sqrt(mean((oob_actual - oob_pred)^2)),
+        mae = mean(abs(oob_actual - oob_pred))
+      )
+    }
+  }
+  
+  var_imp <- summary(model, plotit = FALSE)
+  
+  return(list(
+    model = model,
+    oob_metrics = oob_metrics,
+    var_importance = var_imp
+  ))
 }
 
 # =============================================================================
@@ -667,8 +717,8 @@ fit_single_bootstrap_brt <- function(species, dataset, covariates,
 # =============================================================================
 
 fit_bootstrap_ensemble <- function(species, dataset_name, 
-                                  n_boot = n_bootstrap,
-                                  family = "bernoulli") {
+                                   n_boot = n_bootstrap,
+                                   family = "bernoulli") {
   
   cat("\n=======================================================================\n")
   cat("  BOOTSTRAP ENSEMBLE:", species, "(", family, ")\n")
@@ -677,7 +727,6 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
   dataset <- get(dataset_name, envir = .GlobalEnv)
   covariates <- get_covariates_for_dataset(dataset_name)
   
-  # Check for sufficient data
   if (family == "bernoulli") {
     n_present <- sum(dataset[[species]] >= 1)
   } else {
@@ -685,6 +734,7 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
   }
   
   cat("Sample size:", n_present, "presences\n")
+  cat("Covariates:", paste(covariates, collapse = ", "), "\n")
   
   if (n_present < 20) {
     cat("SKIPPED: Insufficient data\n")
@@ -695,34 +745,34 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
   
   start_time <- Sys.time()
   
-  # Fit bootstrap models (parallel or serial)
-  if (use_parallel) {
-    cl <- makeCluster(n_cores)
-    clusterExport(cl, c("fit_single_bootstrap_brt", "get_tree_complexity",
-                       "species", "dataset", "covariates", "family"),
-                 envir = environment())
-    clusterEvalQ(cl, {
+  if (use_parallel && n_cores > 1) {
+    cl <- parallel::makeCluster(n_cores)
+    
+    parallel::clusterExport(cl, c("fit_single_bootstrap_brt", "get_tree_complexity",
+                                  "species", "dataset", "covariates", "family"),
+                            envir = environment())
+    parallel::clusterEvalQ(cl, {
       library(dismo)
       library(gbm)
       library(dplyr)
+      library(pROC)
     })
     
-    bootstrap_models <- parLapply(cl, 1:n_boot, function(i) {
+    bootstrap_results <- parallel::parLapply(cl, 1:n_boot, function(i) {
       fit_single_bootstrap_brt(species, dataset, covariates, i, family)
     })
     
-    stopCluster(cl)
+    parallel::stopCluster(cl)
   } else {
-    bootstrap_models <- lapply(1:n_boot, function(i) {
-      if (i %% 10 == 0) cat("  Iteration", i, "/", n_boot, "\n")
+    bootstrap_results <- lapply(1:n_boot, function(i) {
+      if (i %% 25 == 0) cat("  Iteration", i, "/", n_boot, "\n")
       fit_single_bootstrap_brt(species, dataset, covariates, i, family)
     })
   }
   
-  # Remove failed models
-  successful <- !sapply(bootstrap_models, is.null)
-  bootstrap_models <- bootstrap_models[successful]
-  n_successful <- length(bootstrap_models)
+  successful <- !sapply(bootstrap_results, is.null)
+  bootstrap_results <- bootstrap_results[successful]
+  n_successful <- length(bootstrap_results)
   
   elapsed <- difftime(Sys.time(), start_time, units = "secs")
   
@@ -735,41 +785,97 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
     cat("  WARNING: Low success rate (<50%)\n")
   }
   
-  # Calculate consensus variable importance
-  if (n_successful > 0) {
-    cat("\nCalculating consensus variable importance...\n")
+  # Extract models
+  bootstrap_models <- lapply(bootstrap_results, function(x) x$model)
+  
+  # Aggregate OOB metrics with CI
+  oob_metrics_list <- lapply(bootstrap_results, function(x) x$oob_metrics)
+  oob_metrics_list <- oob_metrics_list[!sapply(oob_metrics_list, is.null)]
+  
+  aggregated_metrics <- NULL
+  if (length(oob_metrics_list) > 10) {
+    if (family == "bernoulli") {
+      auc_vals <- sapply(oob_metrics_list, function(x) x$auc)
+      sens_vals <- sapply(oob_metrics_list, function(x) x$sensitivity)
+      spec_vals <- sapply(oob_metrics_list, function(x) x$specificity)
+      acc_vals <- sapply(oob_metrics_list, function(x) x$accuracy)
+      thresh_vals <- sapply(oob_metrics_list, function(x) x$threshold)
+      
+      aggregated_metrics <- data.frame(
+        metric = c("AUC", "Sensitivity", "Specificity", "Accuracy", "Threshold"),
+        mean = c(mean(auc_vals, na.rm = TRUE), mean(sens_vals, na.rm = TRUE),
+                 mean(spec_vals, na.rm = TRUE), mean(acc_vals, na.rm = TRUE),
+                 mean(thresh_vals, na.rm = TRUE)),
+        sd = c(sd(auc_vals, na.rm = TRUE), sd(sens_vals, na.rm = TRUE),
+               sd(spec_vals, na.rm = TRUE), sd(acc_vals, na.rm = TRUE),
+               sd(thresh_vals, na.rm = TRUE)),
+        lower_ci = c(quantile(auc_vals, 0.025, na.rm = TRUE),
+                     quantile(sens_vals, 0.025, na.rm = TRUE),
+                     quantile(spec_vals, 0.025, na.rm = TRUE),
+                     quantile(acc_vals, 0.025, na.rm = TRUE),
+                     quantile(thresh_vals, 0.025, na.rm = TRUE)),
+        upper_ci = c(quantile(auc_vals, 0.975, na.rm = TRUE),
+                     quantile(sens_vals, 0.975, na.rm = TRUE),
+                     quantile(spec_vals, 0.975, na.rm = TRUE),
+                     quantile(acc_vals, 0.975, na.rm = TRUE),
+                     quantile(thresh_vals, 0.975, na.rm = TRUE))
+      )
+    } else {
+      cor_vals <- sapply(oob_metrics_list, function(x) x$correlation)
+      rmse_vals <- sapply(oob_metrics_list, function(x) x$rmse)
+      mae_vals <- sapply(oob_metrics_list, function(x) x$mae)
+      
+      aggregated_metrics <- data.frame(
+        metric = c("Correlation", "RMSE", "MAE"),
+        mean = c(mean(cor_vals, na.rm = TRUE), mean(rmse_vals, na.rm = TRUE),
+                 mean(mae_vals, na.rm = TRUE)),
+        sd = c(sd(cor_vals, na.rm = TRUE), sd(rmse_vals, na.rm = TRUE),
+               sd(mae_vals, na.rm = TRUE)),
+        lower_ci = c(quantile(cor_vals, 0.025, na.rm = TRUE),
+                     quantile(rmse_vals, 0.025, na.rm = TRUE),
+                     quantile(mae_vals, 0.025, na.rm = TRUE)),
+        upper_ci = c(quantile(cor_vals, 0.975, na.rm = TRUE),
+                     quantile(rmse_vals, 0.975, na.rm = TRUE),
+                     quantile(mae_vals, 0.975, na.rm = TRUE))
+      )
+    }
     
-    var_imp_list <- lapply(bootstrap_models, function(m) {
-      summary(m, plotit = FALSE)
+    cat("\nOOB Performance Metrics (Mean ± SD [95% CI]):\n")
+    apply(aggregated_metrics, 1, function(row) {
+      cat(sprintf("  %s: %.3f ± %.3f [%.3f, %.3f]\n",
+                  row["metric"], as.numeric(row["mean"]), as.numeric(row["sd"]),
+                  as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
     })
-    
-    # Average variable importance across models
-    all_vars <- unique(unlist(lapply(var_imp_list, function(x) x$var)))
-    consensus_imp <- data.frame(var = all_vars)
-    
-    for (v in all_vars) {
-      imps <- sapply(var_imp_list, function(vi) {
-        idx <- which(vi$var == v)
-        if (length(idx) > 0) vi$rel.inf[idx] else 0
-      })
-      consensus_imp$mean[consensus_imp$var == v] <- mean(imps)
-      consensus_imp$sd[consensus_imp$var == v] <- sd(imps)
-      consensus_imp$cv[consensus_imp$var == v] <- sd(imps) / mean(imps)
-    }
-    
-    consensus_imp <- consensus_imp[order(-consensus_imp$mean), ]
-    
-    cat("\nConsensus Variable Importance:\n")
-    for (i in 1:nrow(consensus_imp)) {
-      cat(sprintf("  %s: %.2f%% ± %.2f%% (CV=%.2f)\n",
-                  consensus_imp$var[i],
-                  consensus_imp$mean[i],
-                  consensus_imp$sd[i],
-                  consensus_imp$cv[i]))
-    }
   }
   
-  # Store metadata
+  # Consensus variable importance with CI
+  var_imp_list <- lapply(bootstrap_results, function(x) x$var_importance)
+  all_vars <- unique(unlist(lapply(var_imp_list, function(x) x$var)))
+  
+  consensus_imp <- data.frame(var = all_vars, stringsAsFactors = FALSE)
+  
+  imp_matrix <- sapply(var_imp_list, function(vi) {
+    sapply(all_vars, function(v) {
+      idx <- which(vi$var == v)
+      if (length(idx) > 0) vi$rel.inf[idx] else 0
+    })
+  })
+  
+  consensus_imp$mean <- apply(imp_matrix, 1, mean)
+  consensus_imp$sd <- apply(imp_matrix, 1, sd)
+  consensus_imp$lower_ci <- apply(imp_matrix, 1, quantile, probs = 0.025)
+  consensus_imp$upper_ci <- apply(imp_matrix, 1, quantile, probs = 0.975)
+  consensus_imp$cv <- consensus_imp$sd / consensus_imp$mean
+  
+  consensus_imp <- consensus_imp[order(-consensus_imp$mean), ]
+  
+  cat("\nConsensus Variable Importance (Mean ± SD [95% CI]):\n")
+  apply(consensus_imp, 1, function(row) {
+    cat(sprintf("  %s: %.2f%% ± %.2f%% [%.2f%%, %.2f%%]\n",
+                row["var"], as.numeric(row["mean"]), as.numeric(row["sd"]),
+                as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
+  })
+  
   result <- list(
     species = species,
     family = family,
@@ -778,7 +884,9 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
     n_successful = n_successful,
     success_rate = n_successful / n_boot,
     covariates = covariates,
-    consensus_importance = if (n_successful > 0) consensus_imp else NULL
+    consensus_importance = consensus_imp,
+    aggregated_metrics = aggregated_metrics,
+    oob_metrics_raw = oob_metrics_list
   )
   
   class(result) <- c("bootstrap_brt", class(result))
@@ -791,7 +899,7 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
 # =============================================================================
 
 predict_bootstrap_ensemble <- function(bootstrap_ensemble, newdata, 
-                                      type = "response") {
+                                       type = "response") {
   
   if (is.null(bootstrap_ensemble) || bootstrap_ensemble$n_successful == 0) {
     return(NULL)
@@ -800,17 +908,34 @@ predict_bootstrap_ensemble <- function(bootstrap_ensemble, newdata,
   models <- bootstrap_ensemble$models
   n_models <- length(models)
   
-  # Get predictions from each model
-  predictions_matrix <- sapply(models, function(m) {
-    predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
-  })
+  # Parallel prediction if large dataset
+  if (nrow(newdata) > 10000 && use_parallel && n_cores > 1) {
+    cl <- parallel::makeCluster(n_cores)
+    parallel::clusterExport(cl, c("models", "newdata", "type"), envir = environment())
+    parallel::clusterEvalQ(cl, library(gbm))
+    
+    predictions_list <- parallel::parLapply(cl, models, function(m) {
+      predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
+    })
+    
+    parallel::stopCluster(cl)
+    predictions_matrix <- do.call(cbind, predictions_list)
+  } else {
+    predictions_matrix <- sapply(models, function(m) {
+      predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
+    })
+  }
   
-  # Calculate statistics
   pred_mean <- rowMeans(predictions_matrix, na.rm = TRUE)
   pred_sd <- apply(predictions_matrix, 1, sd, na.rm = TRUE)
   pred_lower <- apply(predictions_matrix, 1, quantile, probs = 0.025, na.rm = TRUE)
   pred_upper <- apply(predictions_matrix, 1, quantile, probs = 0.975, na.rm = TRUE)
-  pred_cv <- pred_sd / pred_mean  # Coefficient of variation
+  pred_cv <- pred_sd / (pred_mean + 1e-10)
+  
+  # Model agreement (proportion within 0.1 of mean)
+  pred_agreement <- apply(predictions_matrix, 1, function(row) {
+    mean(abs(row - mean(row, na.rm = TRUE)) < 0.1, na.rm = TRUE)
+  })
   
   result <- list(
     mean = pred_mean,
@@ -818,6 +943,7 @@ predict_bootstrap_ensemble <- function(bootstrap_ensemble, newdata,
     lower_ci = pred_lower,
     upper_ci = pred_upper,
     cv = pred_cv,
+    agreement = pred_agreement,
     n_models = n_models,
     all_predictions = predictions_matrix
   )
@@ -835,47 +961,143 @@ cat("=======================================================================\n\n
 
 set.seed(1999)
 
-# Binary (presence/absence) models
-cat("STEP 1: BINARY MODELS\n")
+cat("STEP 1: BINARY (PRESENCE/ABSENCE) MODELS\n")
 cat("-----------------------------------------------------------------------\n")
 
-BRT_Bootstrap_Binary <- map2(species_list, dataset_names, 
-                             ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "bernoulli")) %>%
-  set_names(species_list)
+BRT_Bootstrap_Binary <- purrr::map2(species_list, dataset_names, 
+                                    ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "bernoulli")) %>%
+  purrr::set_names(species_list)
 
-# Count models
-cat("\n\nSTEP 2: COUNT MODELS\n")
+cat("\n\nSTEP 2: COUNT (ABUNDANCE) MODELS\n")
 cat("-----------------------------------------------------------------------\n")
 
-BRT_Bootstrap_Count <- map2(species_list, dataset_names,
-                            ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "poisson")) %>%
-  set_names(species_list)
+BRT_Bootstrap_Count <- purrr::map2(species_list, dataset_names,
+                                   ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "poisson")) %>%
+  purrr::set_names(species_list)
 
 # =============================================================================
-# SUMMARY
+# COMPREHENSIVE SUMMARY WITH CI
 # =============================================================================
 
 cat("\n=======================================================================\n")
-cat("  BOOTSTRAP ENSEMBLE SUMMARY\n")
+cat("  BOOTSTRAP ENSEMBLE SUMMARY (100 REPLICATES)\n")
 cat("=======================================================================\n\n")
 
+# Model fitting summary
 summary_table <- data.frame(
   Species = species_list,
-  Binary_Success_Rate = sapply(BRT_Bootstrap_Binary, function(x) {
-    if (is.null(x)) NA else x$success_rate
+  Binary_Success = sapply(BRT_Bootstrap_Binary, function(x) {
+    if (is.null(x)) "FAILED" else paste0(x$n_successful, "/", x$n_bootstrap)
   }),
-  Binary_N_Models = sapply(BRT_Bootstrap_Binary, function(x) {
-    if (is.null(x)) 0 else x$n_successful
-  }),
-  Count_Success_Rate = sapply(BRT_Bootstrap_Count, function(x) {
-    if (is.null(x)) NA else x$success_rate
-  }),
-  Count_N_Models = sapply(BRT_Bootstrap_Count, function(x) {
-    if (is.null(x)) 0 else x$n_successful
+  Count_Success = sapply(BRT_Bootstrap_Count, function(x) {
+    if (is.null(x)) "FAILED" else paste0(x$n_successful, "/", x$n_bootstrap)
   })
 )
 
+cat("MODEL FITTING SUCCESS:\n")
 print(summary_table, row.names = FALSE)
+
+# Binary model performance with CI
+cat("\n\nBINARY MODEL PERFORMANCE (OOB Metrics with 95% CI):\n")
+cat("-----------------------------------------------------------------------\n")
+
+binary_perf_table <- purrr::map_dfr(names(BRT_Bootstrap_Binary), function(sp) {
+  ens <- BRT_Bootstrap_Binary[[sp]]
+  if (is.null(ens) || is.null(ens$aggregated_metrics)) {
+    return(data.frame(
+      Species = sp,
+      AUC = NA, AUC_CI = NA,
+      Sensitivity = NA, Sens_CI = NA,
+      Specificity = NA, Spec_CI = NA,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  metrics <- ens$aggregated_metrics
+  
+  get_metric <- function(name) {
+    row <- metrics[metrics$metric == name, ]
+    if (nrow(row) == 0) return(list(mean = NA, ci = NA))
+    list(
+      mean = round(row$mean, 3),
+      ci = paste0("[", round(row$lower_ci, 3), ", ", round(row$upper_ci, 3), "]")
+    )
+  }
+  
+  auc <- get_metric("AUC")
+  sens <- get_metric("Sensitivity")
+  spec <- get_metric("Specificity")
+  
+  data.frame(
+    Species = sp,
+    AUC = auc$mean, AUC_CI = auc$ci,
+    Sensitivity = sens$mean, Sens_CI = sens$ci,
+    Specificity = spec$mean, Spec_CI = spec$ci,
+    stringsAsFactors = FALSE
+  )
+})
+
+print(binary_perf_table, row.names = FALSE)
+
+# Count model performance with CI
+cat("\n\nCOUNT MODEL PERFORMANCE (OOB Metrics with 95% CI):\n")
+cat("-----------------------------------------------------------------------\n")
+
+count_perf_table <- purrr::map_dfr(names(BRT_Bootstrap_Count), function(sp) {
+  ens <- BRT_Bootstrap_Count[[sp]]
+  if (is.null(ens) || is.null(ens$aggregated_metrics)) {
+    return(data.frame(
+      Species = sp,
+      Correlation = NA, Cor_CI = NA,
+      RMSE = NA, RMSE_CI = NA,
+      MAE = NA, MAE_CI = NA,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  metrics <- ens$aggregated_metrics
+  
+  get_metric <- function(name, digits = 3) {
+    row <- metrics[metrics$metric == name, ]
+    if (nrow(row) == 0) return(list(mean = NA, ci = NA))
+    list(
+      mean = round(row$mean, digits),
+      ci = paste0("[", round(row$lower_ci, digits), ", ", round(row$upper_ci, digits), "]")
+    )
+  }
+  
+  cor_m <- get_metric("Correlation")
+  rmse_m <- get_metric("RMSE", 2)
+  mae_m <- get_metric("MAE", 2)
+  
+  data.frame(
+    Species = sp,
+    Correlation = cor_m$mean, Cor_CI = cor_m$ci,
+    RMSE = rmse_m$mean, RMSE_CI = rmse_m$ci,
+    MAE = mae_m$mean, MAE_CI = mae_m$ci,
+    stringsAsFactors = FALSE
+  )
+})
+
+print(count_perf_table, row.names = FALSE)
+
+# Variable importance summary
+cat("\n\nVARIABLE IMPORTANCE SUMMARY (Mean ± SD across 100 bootstraps):\n")
+cat("-----------------------------------------------------------------------\n")
+
+purrr::walk(names(BRT_Bootstrap_Binary), function(sp) {
+  ens <- BRT_Bootstrap_Binary[[sp]]
+  if (is.null(ens)) return()
+  
+  cat("\n", sp, " (Binary Model):\n", sep = "")
+  imp <- ens$consensus_importance
+  
+  apply(imp[1:min(5, nrow(imp)), ], 1, function(row) {
+    cat(sprintf("  %s: %.1f%% ± %.1f%% [%.1f%%, %.1f%%]\n",
+                row["var"], as.numeric(row["mean"]), as.numeric(row["sd"]),
+                as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
+  })
+})
 
 cat("\n=======================================================================\n")
 cat("  BOOTSTRAP MODELING COMPLETE\n")
@@ -887,478 +1109,466 @@ cat("  - BRT_Bootstrap_Count: List of", length(BRT_Bootstrap_Count), "bootstrap 
 
 cat("Each ensemble contains:\n")
 cat("  - models: List of", n_bootstrap, "bootstrap BRT models\n")
-cat("  - consensus_importance: Average variable importance across models\n")
-cat("  - Metadata: Success rate, covariates used, etc.\n\n")
+cat("  - consensus_importance: Variable importance with 95% CI\n")
+cat("  - aggregated_metrics: OOB performance metrics with 95% CI\n")
+cat("  - oob_metrics_raw: Raw metrics from each bootstrap iteration\n\n")
 
-cat("Next steps:\n")
-cat("  1. Use bootstrap ensembles for predictions with true uncertainty\n")
-cat("  2. Generate consensus habitat suitability maps\n")
-cat("  3. Create uncertainty maps based on model agreement\n\n")
+cat("Use predict_bootstrap_ensemble() for predictions with uncertainty.\n")
+cat("Returns: mean, SD, 95% CI, CV, and model agreement for each prediction.\n\n")
 
-cat("Prediction function: predict_bootstrap_ensemble()\n")
-cat("  Returns: mean, SD, 95% CI, coefficient of variation\n\n")
 ```
 
 
 
-```{r Code for BRT Predictions w/ Landcover}
+```{r Code for BRT Predictions}
 # =============================================================================
-# MOSQUITO SPECIES INTERACTIVE MAP GENERATION
+# BOOTSTRAP BRT ENSEMBLE PREDICTIONS - OPTIMIZED (SEQUENTIAL)
 # =============================================================================
+# Key finding: Parallel overhead >> prediction time for gbm models
+# Sequential prediction: ~35 seconds for 100 models
+# matrixStats for row operations: ~10 seconds
+# Total per prediction: ~1-2 minutes (vs 50+ minutes with parallelization)
+# =============================================================================
+
 library(raster)
-library(terra)
-library(sf)
-library(exactextractr)
-library(leaflet)
-library(leaflet.extras)
-library(htmltools)
-library(htmlwidgets)
-library(viridis)
+library(dismo)
+library(gbm)
+library(matrixStats)
 library(dplyr)
+library(purrr)
 
 cat("\n=======================================================================\n")
-cat("  MOSQUITO SPECIES INTERACTIVE MAP GENERATION\n")
+cat("  BOOTSTRAP ENSEMBLE PREDICTIONS - SEQUENTIAL OPTIMIZED\n")
+cat("  ~2 min per prediction (vs 50+ min with parallel overhead)\n")
 cat("=======================================================================\n\n")
 
-# Configuration
-prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
-output_dir <- file.path(prediction_base, "Interactive_Maps")
-dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+output_base <- "Predictions"
+
+dir.create(output_base, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_base, "Baseline"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_base, "Monthly"), recursive = TRUE, showWarnings = FALSE)
 
 month_names <- c("January", "February", "March", "April", "May", "June",
                  "July", "August", "September", "October", "November", "December")
 
 species_mapping <- c(
-  "Aedes_aegypti" = "Aeae",
-  "Aedes_albopictus" = "Aealb",
-  "Anopheles_albimanus" = "Aem",
-  "Culex_nigripalpus" = "Cxn",
-  "Culex_quinquefasciatus" = "Quinx",
-  "Psorophora_columbiae" = "Psc"
+  Aeae = "Aedes_aegypti",
+  Aealb = "Aedes_albopictus", 
+  Quinx = "Culex_quinquefasciatus",
+  Aem = "Aedes_mediovittatus",
+  Cxn = "Culex_nigripalpus",
+  Psc = "Psorophora_columbiae"
 )
 
-cat("Species to process:", paste(names(species_mapping), collapse=", "), "\n\n")
+cat("Output directory:", output_base, "\n\n")
 
 # =============================================================================
-# EXTRACT BASELINE STATISTICS
+# CORE PREDICTION FUNCTION - SEQUENTIAL + matrixStats
 # =============================================================================
-extract_baseline_stats <- function(species_name, shapefile) {
-  cat("Extracting baseline statistics for", species_name, "\n")
-  
-  dir_name <- species_mapping[species_name]
-  species_dir <- file.path(prediction_base, "Baseline", dir_name)
-  
-  stats_df <- data.frame(
-    ADM3_EN = shapefile$ADM3_EN,
-    ADM3_PCODE = shapefile$ADM3_PCODE,
-    ADM2_EN = shapefile$ADM2_EN,
-    ADM1_EN = shapefile$ADM1_EN
-  )
-  
-  # Extract presence mean
-  presence_mean_path <- file.path(species_dir, paste0(dir_name, "_Presence_Mean.tif"))
-  cat("  Processing:", basename(presence_mean_path), "\n")
-  r <- rast(presence_mean_path)
-  stats_df$presence_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                         "mean", progress = FALSE)
-  cat("    Range: [", round(min(stats_df$presence_mean, na.rm=TRUE), 4), ", ",
-      round(max(stats_df$presence_mean, na.rm=TRUE), 4), "]\n", sep="")
-  
-  # Extract presence standard deviation
-  presence_sd_path <- file.path(species_dir, paste0(dir_name, "_Presence_SD.tif"))
-  if (file.exists(presence_sd_path)) {
-    cat("  Processing:", basename(presence_sd_path), "\n")
-    r <- rast(presence_sd_path)
-    stats_df$presence_sd <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                         "mean", progress = FALSE)
-  }
-  
-  # Extract presence confidence intervals
-  presence_lower_path <- file.path(species_dir, paste0(dir_name, "_Presence_Lower95.tif"))
-  if (file.exists(presence_lower_path)) {
-    cat("  Processing:", basename(presence_lower_path), "\n")
-    r <- rast(presence_lower_path)
-    stats_df$presence_lower <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
-  }
-  
-  presence_upper_path <- file.path(species_dir, paste0(dir_name, "_Presence_Upper95.tif"))
-  if (file.exists(presence_upper_path)) {
-    cat("  Processing:", basename(presence_upper_path), "\n")
-    r <- rast(presence_upper_path)
-    stats_df$presence_upper <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
-  }
-  
-  # Extract abundance statistics
-  abundance_mean_path <- file.path(species_dir, paste0(dir_name, "_Abundance_Mean.tif"))
-  if (file.exists(abundance_mean_path)) {
-    cat("  Processing:", basename(abundance_mean_path), "\n")
-    r <- rast(abundance_mean_path)
-    stats_df$abundance_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
-    cat("    Range: [", round(min(stats_df$abundance_mean, na.rm=TRUE), 2), ", ",
-        round(max(stats_df$abundance_mean, na.rm=TRUE), 2), "]\n", sep="")
-    
-    abundance_sd_path <- file.path(species_dir, paste0(dir_name, "_Abundance_SD.tif"))
-    if (file.exists(abundance_sd_path)) {
-      cat("  Processing:", basename(abundance_sd_path), "\n")
-      r <- rast(abundance_sd_path)
-      stats_df$abundance_sd <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
-    }
-  }
-  
-  cat("Baseline extraction complete\n\n")
-  return(stats_df)
-}
 
-# =============================================================================
-# EXTRACT MONTHLY STATISTICS
-# =============================================================================
-extract_monthly_stats <- function(species_name, shapefile) {
-  cat("Extracting monthly statistics for", species_name, "\n")
+predict_ensemble_fast <- function(bootstrap_ensemble, 
+                                  raster_stack,
+                                  calc_full_uncertainty = TRUE,
+                                  verbose = TRUE) {
   
-  dir_name <- species_mapping[species_name]
-  species_dir <- file.path(prediction_base, "Monthly", dir_name)
-  
-  if (!dir.exists(species_dir)) {
-    cat("Monthly directory not found\n\n")
+  if (is.null(bootstrap_ensemble) || bootstrap_ensemble$n_successful == 0) {
+    if (verbose) cat("    ERROR: No valid models in ensemble\n")
     return(NULL)
   }
   
-  monthly_stats <- list()
+  models <- bootstrap_ensemble$models
+  n_models <- length(models)
+  covariates <- bootstrap_ensemble$covariates
   
-  for (month in month_names) {
-    presence_path <- file.path(species_dir, paste0(dir_name, "_", month, "_Presence.tif"))
+  if (verbose) {
+    cat("    Models:", n_models, "| Covariates:", length(covariates), "\n")
+  }
+  
+  # Verify covariates
+ stack_names <- names(raster_stack)
+  missing_covs <- setdiff(covariates, stack_names)
+  if (length(missing_covs) > 0) {
+    if (verbose) cat("    ERROR: Missing covariates:", paste(missing_covs, collapse = ", "), "\n")
+    return(NULL)
+  }
+  
+  # Subset and extract values
+  pred_stack <- raster::subset(raster_stack, covariates)
+  all_vals <- raster::getValues(pred_stack)
+  n_cells <- nrow(all_vals)
+  
+  # Valid cells mask
+  valid_mask <- complete.cases(all_vals)
+  n_valid <- sum(valid_mask)
+  
+  if (verbose) {
+    cat("    Cells:", format(n_valid, big.mark = ","), "valid /", 
+        format(n_cells, big.mark = ","), "total\n")
+  }
+  
+  if (n_valid == 0) {
+    if (verbose) cat("    ERROR: No valid cells\n")
+    return(NULL)
+  }
+  
+  # Prepare prediction data
+  valid_df <- as.data.frame(all_vals[valid_mask, , drop = FALSE])
+  names(valid_df) <- covariates
+  rm(all_vals)
+  
+  # Sequential prediction - FAST without parallel overhead
+  if (verbose) cat("    Predicting (sequential)...")
+  pred_start <- Sys.time()
+  
+  pred_matrix <- sapply(models, function(m) {
+    predict(m, valid_df, n.trees = m$gbm.call$best.trees, type = "response")
+  })
+  
+  pred_time <- difftime(Sys.time(), pred_start, units = "secs")
+  if (verbose) cat(" ", round(pred_time, 1), "sec\n")
+  
+  # Calculate statistics with matrixStats
+  if (verbose) cat("    Computing statistics...")
+  stats_start <- Sys.time()
+  
+  pred_mean_valid <- matrixStats::rowMeans2(pred_matrix)
+  pred_sd_valid <- matrixStats::rowSds(pred_matrix)
+  
+  if (calc_full_uncertainty) {
+    quantiles_valid <- matrixStats::rowQuantiles(pred_matrix, probs = c(0.025, 0.975))
+    pred_lower_valid <- quantiles_valid[, 1]
+    pred_upper_valid <- quantiles_valid[, 2]
     
-    if (!file.exists(presence_path)) {
-      cat("  ", month, ": file not found, skipping\n")
+    deviations <- abs(sweep(pred_matrix, 1, pred_mean_valid, "-"))
+    pred_agreement_valid <- matrixStats::rowMeans2(deviations < 0.1)
+    rm(deviations, quantiles_valid)
+  }
+  
+  rm(pred_matrix)
+  
+  stats_time <- difftime(Sys.time(), stats_start, units = "secs")
+  if (verbose) cat(" ", round(stats_time, 1), "sec\n")
+  
+  # Create output rasters
+  template <- pred_stack[[1]]
+  
+  pred_mean_full <- rep(NA_real_, n_cells)
+  pred_sd_full <- rep(NA_real_, n_cells)
+  pred_mean_full[valid_mask] <- pred_mean_valid
+  pred_sd_full[valid_mask] <- pred_sd_valid
+  
+  result <- list(
+    mean = raster::setValues(template, pred_mean_full),
+    sd = raster::setValues(template, pred_sd_full),
+    n_models = n_models
+  )
+  names(result$mean) <- "mean"
+  names(result$sd) <- "sd"
+  
+  if (calc_full_uncertainty) {
+    pred_lower_full <- rep(NA_real_, n_cells)
+    pred_upper_full <- rep(NA_real_, n_cells)
+    pred_agreement_full <- rep(NA_real_, n_cells)
+    
+    pred_lower_full[valid_mask] <- pred_lower_valid
+    pred_upper_full[valid_mask] <- pred_upper_valid
+    pred_agreement_full[valid_mask] <- pred_agreement_valid
+    
+    result$lower_ci <- raster::setValues(template, pred_lower_full)
+    result$upper_ci <- raster::setValues(template, pred_upper_full)
+    result$agreement <- raster::setValues(template, pred_agreement_full)
+    
+    names(result$lower_ci) <- "lower_95ci"
+    names(result$upper_ci) <- "upper_95ci"
+    names(result$agreement) <- "agreement"
+  }
+  
+  return(result)
+}
+
+# =============================================================================
+# BASELINE PREDICTION FUNCTION
+# =============================================================================
+
+predict_baseline_species <- function(species_code, 
+                                     binary_ensemble,
+                                     count_ensemble = NULL,
+                                     average_stack,
+                                     output_dir = output_base) {
+  
+  species_name <- species_mapping[species_code]
+  
+  cat("\n-----------------------------------------------------------------------\n")
+  cat("  BASELINE:", species_name, "\n")
+  cat("-----------------------------------------------------------------------\n")
+  
+  if (is.null(binary_ensemble)) {
+    cat("  ERROR: No binary ensemble\n")
+    return(NULL)
+  }
+  
+  species_dir <- file.path(output_dir, "Baseline", species_code)
+  dir.create(species_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  start_time <- Sys.time()
+  
+  # Presence predictions
+  cat("\n  PRESENCE MODEL:\n")
+  presence_preds <- predict_ensemble_fast(binary_ensemble, average_stack,
+                                          calc_full_uncertainty = TRUE)
+  
+  if (!is.null(presence_preds)) {
+    cat("    Saving rasters...\n")
+    
+    writeRaster(presence_preds$mean, 
+                file.path(species_dir, paste0(species_code, "_Presence_Mean.tif")),
+                overwrite = TRUE)
+    writeRaster(presence_preds$sd,
+                file.path(species_dir, paste0(species_code, "_Presence_SD.tif")),
+                overwrite = TRUE)
+    writeRaster(presence_preds$lower_ci,
+                file.path(species_dir, paste0(species_code, "_Presence_Lower95.tif")),
+                overwrite = TRUE)
+    writeRaster(presence_preds$upper_ci,
+                file.path(species_dir, paste0(species_code, "_Presence_Upper95.tif")),
+                overwrite = TRUE)
+    writeRaster(presence_preds$agreement,
+                file.path(species_dir, paste0(species_code, "_Presence_Agreement.tif")),
+                overwrite = TRUE)
+    
+    cat("    Mean prob:", round(cellStats(presence_preds$mean, mean, na.rm = TRUE), 4), "\n")
+  }
+  
+  # Abundance predictions
+  if (!is.null(count_ensemble)) {
+    cat("\n  ABUNDANCE MODEL:\n")
+    abundance_preds <- predict_ensemble_fast(count_ensemble, average_stack,
+                                             calc_full_uncertainty = TRUE)
+    
+    if (!is.null(abundance_preds)) {
+      writeRaster(abundance_preds$mean,
+                  file.path(species_dir, paste0(species_code, "_Abundance_Mean.tif")),
+                  overwrite = TRUE)
+      writeRaster(abundance_preds$sd,
+                  file.path(species_dir, paste0(species_code, "_Abundance_SD.tif")),
+                  overwrite = TRUE)
+      writeRaster(abundance_preds$lower_ci,
+                  file.path(species_dir, paste0(species_code, "_Abundance_Lower95.tif")),
+                  overwrite = TRUE)
+      writeRaster(abundance_preds$upper_ci,
+                  file.path(species_dir, paste0(species_code, "_Abundance_Upper95.tif")),
+                  overwrite = TRUE)
+      
+      # Combined metric
+      combined_mean <- presence_preds$mean * abundance_preds$mean
+      combined_sd <- sqrt(
+        (presence_preds$mean^2 * abundance_preds$sd^2) +
+        (abundance_preds$mean^2 * presence_preds$sd^2) +
+        (presence_preds$sd^2 * abundance_preds$sd^2)
+      )
+      
+      writeRaster(combined_mean,
+                  file.path(species_dir, paste0(species_code, "_Combined_Mean.tif")),
+                  overwrite = TRUE)
+      writeRaster(combined_sd,
+                  file.path(species_dir, paste0(species_code, "_Combined_SD.tif")),
+                  overwrite = TRUE)
+      
+      cat("    Mean abundance:", round(cellStats(abundance_preds$mean, mean, na.rm = TRUE), 2), "\n")
+      
+      rm(abundance_preds, combined_mean, combined_sd)
+    }
+  }
+  
+  rm(presence_preds)
+  gc(verbose = FALSE)
+  
+  elapsed <- difftime(Sys.time(), start_time, units = "mins")
+  cat("\n  Baseline complete:", round(elapsed, 2), "min\n")
+  
+  return(species_dir)
+}
+
+# =============================================================================
+# MONTHLY PREDICTION FUNCTION
+# =============================================================================
+
+predict_monthly_species <- function(species_code,
+                                    binary_ensemble,
+                                    count_ensemble = NULL,
+                                    monthly_stacks,
+                                    output_dir = output_base) {
+  
+  species_name <- species_mapping[species_code]
+  
+  cat("\n-----------------------------------------------------------------------\n")
+  cat("  MONTHLY:", species_name, "\n")
+  cat("-----------------------------------------------------------------------\n\n")
+  
+  if (is.null(binary_ensemble)) {
+    cat("  ERROR: No binary ensemble\n")
+    return(NULL)
+  }
+  
+  species_dir <- file.path(output_dir, "Monthly", species_code)
+  dir.create(species_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  start_time <- Sys.time()
+  
+  for (i in seq_along(month_names)) {
+    month <- month_names[i]
+    cat("  [", i, "/12] ", month, "\n", sep = "")
+    
+    month_stack <- monthly_stacks[[month]]
+    if (is.null(month_stack)) {
+      cat("    WARNING: No stack for", month, "\n")
       next
     }
     
-    cat("  Processing:", month, "\n")
+    # Presence (mean and SD only for monthly)
+    cat("    Presence: ")
+    pres_pred <- predict_ensemble_fast(binary_ensemble, month_stack,
+                                       calc_full_uncertainty = FALSE, verbose = FALSE)
     
-    month_df <- data.frame(
-      ADM3_EN = shapefile$ADM3_EN,
-      ADM3_PCODE = shapefile$ADM3_PCODE,
-      ADM2_EN = shapefile$ADM2_EN,
-      ADM1_EN = shapefile$ADM1_EN,
-      month = month
-    )
-    
-    # Extract presence
-    r <- rast(presence_path)
-    month_df$presence_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                           "mean", progress = FALSE)
-    
-    # Extract abundance if available
-    abundance_path <- file.path(species_dir, paste0(dir_name, "_", month, "_Abundance.tif"))
-    if (file.exists(abundance_path)) {
-      r <- rast(abundance_path)
-      month_df$abundance_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                              "mean", progress = FALSE)
+    if (!is.null(pres_pred)) {
+      writeRaster(pres_pred$mean,
+                  file.path(species_dir, paste0(species_code, "_", month, "_Presence.tif")),
+                  overwrite = TRUE)
+      writeRaster(pres_pred$sd,
+                  file.path(species_dir, paste0(species_code, "_", month, "_Presence_SD.tif")),
+                  overwrite = TRUE)
+      cat("mean =", round(cellStats(pres_pred$mean, mean, na.rm = TRUE), 4), "\n")
+      rm(pres_pred)
     }
     
-    monthly_stats[[month]] <- month_df
+    # Abundance
+    if (!is.null(count_ensemble)) {
+      cat("    Abundance: ")
+      abund_pred <- predict_ensemble_fast(count_ensemble, month_stack,
+                                          calc_full_uncertainty = FALSE, verbose = FALSE)
+      
+      if (!is.null(abund_pred)) {
+        writeRaster(abund_pred$mean,
+                    file.path(species_dir, paste0(species_code, "_", month, "_Abundance.tif")),
+                    overwrite = TRUE)
+        cat("mean =", round(cellStats(abund_pred$mean, mean, na.rm = TRUE), 2), "\n")
+        rm(abund_pred)
+      }
+    }
+    
+    gc(verbose = FALSE)
   }
   
-  cat("Monthly extraction complete (", length(monthly_stats), " months processed)\n\n", sep="")
-  return(monthly_stats)
+  elapsed <- difftime(Sys.time(), start_time, units = "mins")
+  cat("\n  Monthly complete:", round(elapsed, 1), "min\n")
+  
+  return(species_dir)
 }
 
 # =============================================================================
-# CREATE INTERACTIVE MAP
+# BATCH PROCESSING FUNCTION
 # =============================================================================
-create_interactive_map <- function(species_name, shapefile, baseline_stats,
-                                  monthly_stats, output_path) {
-  cat("Creating interactive map for", species_name, "\n")
+
+predict_all_species <- function(binary_ensembles,
+                                count_ensembles = NULL,
+                                species_list,
+                                average_stack,
+                                monthly_stacks = NULL,
+                                output_dir = output_base,
+                                do_baseline = TRUE,
+                                do_monthly = TRUE) {
   
-  # Join baseline statistics to shapefile
-  map_data <- shapefile %>%
-    left_join(baseline_stats, by = c("ADM3_EN", "ADM3_PCODE"))
+  cat("\n=======================================================================\n")
+  cat("  BATCH PREDICTIONS - ALL SPECIES\n")
+  cat("=======================================================================\n\n")
   
-  # Log presence data range
-  cat("  Presence range: [", round(min(map_data$presence_mean, na.rm=TRUE), 4), ", ",
-      round(max(map_data$presence_mean, na.rm=TRUE), 4), "]\n", sep="")
+  cat("Species:", length(species_list), "\n")
+  cat("Baseline:", do_baseline, "\n")
+  cat("Monthly:", do_monthly, "\n\n")
   
-  # Determine global maximum abundance for consistent scaling
-  max_abundance_baseline <- if("abundance_mean" %in% names(map_data)) {
-    max(map_data$abundance_mean, na.rm=TRUE)
-  } else {
-    0
-  }
+  start_time <- Sys.time()
   
-  max_abundance_monthly <- 0
-  if (!is.null(monthly_stats) && length(monthly_stats) > 0) {
-    for (month in names(monthly_stats)) {
-      if ("abundance_mean" %in% names(monthly_stats[[month]])) {
-        month_max <- max(monthly_stats[[month]]$abundance_mean, na.rm=TRUE)
-        if (month_max > max_abundance_monthly) {
-          max_abundance_monthly <- month_max
-        }
-      }
+  results <- list()
+  
+  for (i in seq_along(species_list)) {
+    sp <- species_list[i]
+    
+    cat("\n***************************************************************\n")
+    cat("  SPECIES", i, "/", length(species_list), ":", species_mapping[sp], "\n")
+    cat("***************************************************************\n")
+    
+    binary_ens <- binary_ensembles[[sp]]
+    count_ens <- if (!is.null(count_ensembles)) count_ensembles[[sp]] else NULL
+    
+    if (is.null(binary_ens)) {
+      cat("  No binary ensemble - skipping\n")
+      next
     }
-  }
-  
-  max_abundance_global <- max(max_abundance_baseline, max_abundance_monthly)
-  cat("  Global max abundance:", round(max_abundance_global, 2), "\n")
-  
-  # Define color palettes with fixed domains
-  presence_pal <- colorNumeric("magma", domain = c(0, 1), na.color = "transparent")
-  
-  has_abundance <- "abundance_mean" %in% names(map_data)
-  if (has_abundance) {
-    abundance_pal <- colorNumeric("magma",
-                                 domain = c(0, max_abundance_global),
-                                 na.color = "transparent")
-  }
-  
-  # Initialize leaflet map
-  map <- leaflet(map_data) %>%
-    addProviderTiles(providers$CartoDB.Positron, group = "Light") %>%
-    addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
-    setView(lng = -72.3, lat = 19, zoom = 8)
-  
-  # Add baseline presence layer
-  cat("  Adding baseline presence layer\n")
-  map <- map %>%
-    addPolygons(
-      fillColor = ~presence_pal(presence_mean),
-      fillOpacity = 0.7,
-      color = "#666666",
-      weight = 1,
-      opacity = 0.5,
-      smoothFactor = 0.5,
-      layerId = ~ADM3_PCODE,
-      group = "Baseline: Presence",
-      highlightOptions = highlightOptions(
-        weight = 2,
-        color = "#333",
-        fillOpacity = 0.9,
-        bringToFront = TRUE
-      ),
-      popup = ~paste0(
-        "<div style='font-family: Arial; font-size: 12px;'>",
-        "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-        "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
-        "<hr style='margin: 5px 0;'/>",
-        "<b>Presence Probability:</b> ", round(presence_mean, 4),
-        if("presence_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", round(presence_sd, 4)) else "",
-        "</div>"
+    
+    result <- list(species = sp)
+    
+    if (do_baseline) {
+      result$baseline <- predict_baseline_species(
+        species_code = sp,
+        binary_ensemble = binary_ens,
+        count_ensemble = count_ens,
+        average_stack = average_stack,
+        output_dir = output_dir
       )
-    ) %>%
-    addLegend(pal = presence_pal, values = c(0, 1),
-             title = "Presence<br/>Probability", position = "bottomright",
-             group = "Baseline: Presence", layerId = "legend_baseline_presence")
-  
-  # Add baseline abundance layer if available
-  if (has_abundance) {
-    cat("  Adding baseline abundance layer\n")
-    map <- map %>%
-      addPolygons(
-        data = map_data,
-        fillColor = ~abundance_pal(abundance_mean),
-        fillOpacity = 0.7,
-        color = "#666666",
-        weight = 1,
-        opacity = 0.5,
-        smoothFactor = 0.5,
-        layerId = ~paste0(ADM3_PCODE, "_abund"),
-        group = "Baseline: Abundance",
-        highlightOptions = highlightOptions(
-          weight = 2,
-          color = "#333",
-          fillOpacity = 0.9,
-          bringToFront = TRUE
-        ),
-        popup = ~paste0(
-          "<div style='font-family: Arial; font-size: 12px;'>",
-          "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-          "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
-          "<hr style='margin: 5px 0;'/>",
-          "<b>Expected Abundance:</b> ", round(abundance_mean, 2),
-          if("abundance_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", round(abundance_sd, 2)) else "",
-          "</div>"
-        )
-      ) %>%
-      addLegend(pal = abundance_pal, values = c(0, max_abundance_global),
-               title = "Expected<br/>Abundance", position = "bottomright",
-               group = "Baseline: Abundance", layerId = "legend_baseline_abundance")
-  }
-  
-  # Add monthly layers
-  if (!is.null(monthly_stats) && length(monthly_stats) > 0) {
-    cat("  Adding monthly layers (", length(monthly_stats), " months)\n", sep="")
-    
-    for (month in names(monthly_stats)) {
-      month_data <- monthly_stats[[month]]
-      month_map_data <- shapefile %>%
-        left_join(month_data, by = c("ADM3_EN", "ADM3_PCODE"))
-      
-      has_monthly_abundance <- "abundance_mean" %in% names(month_map_data)
-      
-      # Add monthly presence layer
-      map <- map %>%
-        addPolygons(
-          data = month_map_data,
-          fillColor = ~presence_pal(presence_mean),
-          fillOpacity = 0.7,
-          color = "#666666",
-          weight = 1,
-          opacity = 0.5,
-          smoothFactor = 0.5,
-          layerId = ~paste0(ADM3_PCODE, "_", month, "_pres"),
-          group = paste0("Monthly Presence: ", month),
-          highlightOptions = highlightOptions(
-            weight = 2,
-            color = "#333",
-            fillOpacity = 0.9,
-            bringToFront = TRUE
-          ),
-          popup = ~paste0(
-            "<div style='font-family: Arial; font-size: 12px;'>",
-            "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-            "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
-            "<b style='color: #e67e22;'>", month, " - Presence</b>",
-            "<hr style='margin: 5px 0;'/>",
-            "<b>Presence Probability:</b> ", round(presence_mean, 4),
-            "</div>"
-          )
-        ) %>%
-        addLegend(pal = presence_pal, values = c(0, 1),
-                 title = paste0(month, "<br/>Presence"), position = "bottomright",
-                 group = paste0("Monthly Presence: ", month),
-                 layerId = paste0("legend_", month, "_pres"))
-      
-      # Add monthly abundance layer if available
-      if (has_monthly_abundance) {
-        map <- map %>%
-          addPolygons(
-            data = month_map_data,
-            fillColor = ~abundance_pal(abundance_mean),
-            fillOpacity = 0.7,
-            color = "#666666",
-            weight = 1,
-            opacity = 0.5,
-            smoothFactor = 0.5,
-            layerId = ~paste0(ADM3_PCODE, "_", month, "_abund"),
-            group = paste0("Monthly Abundance: ", month),
-            highlightOptions = highlightOptions(
-              weight = 2,
-              color = "#333",
-              fillOpacity = 0.9,
-              bringToFront = TRUE
-            ),
-            popup = ~paste0(
-              "<div style='font-family: Arial; font-size: 12px;'>",
-              "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-              "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
-              "<b style='color: #e67e22;'>", month, " - Abundance</b>",
-              "<hr style='margin: 5px 0;'/>",
-              "<b>Expected Abundance:</b> ", round(abundance_mean, 2),
-              "</div>"
-            )
-          ) %>%
-          addLegend(pal = abundance_pal, values = c(0, max_abundance_global),
-                   title = paste0(month, "<br/>Abundance"), position = "bottomright",
-                   group = paste0("Monthly Abundance: ", month),
-                   layerId = paste0("legend_", month, "_abund"))
-      }
     }
+    
+    if (do_monthly && !is.null(monthly_stacks)) {
+      result$monthly <- predict_monthly_species(
+        species_code = sp,
+        binary_ensemble = binary_ens,
+        count_ensemble = count_ens,
+        monthly_stacks = monthly_stacks,
+        output_dir = output_dir
+      )
+    }
+    
+    results[[sp]] <- result
+    gc(verbose = FALSE)
   }
   
-  # Configure layer controls
-  cat("  Configuring layer controls\n")
-  base_groups <- c("Baseline: Presence")
-  if (has_abundance) base_groups <- c(base_groups, "Baseline: Abundance")
+  elapsed <- difftime(Sys.time(), start_time, units = "mins")
   
-  monthly_presence_groups <- paste0("Monthly Presence: ", names(monthly_stats))
-  monthly_abundance_groups <- paste0("Monthly Abundance: ", names(monthly_stats))
-  all_groups <- c(base_groups, monthly_presence_groups, monthly_abundance_groups)
+  cat("\n=======================================================================\n")
+  cat("  ALL PREDICTIONS COMPLETE\n")
+  cat("=======================================================================\n\n")
   
-  map <- map %>%
-    addLayersControl(
-      baseGroups = c("Light", "Satellite"),
-      overlayGroups = all_groups,
-      options = layersControlOptions(collapsed = FALSE),
-      position = "topright"
-    ) %>%
-    hideGroup(c(monthly_presence_groups, monthly_abundance_groups)) %>%
-    hideGroup(if(has_abundance) "Baseline: Abundance" else NULL)
+  cat("Total time:", round(elapsed, 1), "minutes\n")
+  cat("Average per species:", round(elapsed / length(species_list), 1), "minutes\n\n")
   
-  # Add title with italicized species name
-  species_formatted <- gsub("_", " ", species_name)
-  title_control <- tags$div(
-    style = "margin: 10px; padding: 12px 20px; background: white;
-             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-             display: inline-block;",
-    tags$h3(
-      style = "margin: 0; font-size: 18px; font-style: italic;",
-      species_formatted
-    )
-  )
-  
-  map <- map %>%
-    addControl(title_control, position = "topleft")
-  
-  # Save map to file
-  cat("  Saving map to:", basename(output_path), "\n")
-  saveWidget(map, output_path, selfcontained = TRUE)
-  cat("Map creation complete for", species_name, "\n\n")
-  
-  return(map)
+  return(results)
 }
 
-# =============================================================================
-# PROCESS ALL SPECIES
-# =============================================================================
-cat("=======================================================================\n")
-cat("PROCESSING ALL SPECIES\n")
-cat("=======================================================================\n\n")
 
-for (species_name in names(species_mapping)) {
-  cat("-----------------------------------------------------------------------\n")
-  cat("Species:", species_name, "\n")
-  cat("-----------------------------------------------------------------------\n\n")
-  
-  # Extract baseline statistics
-  cat("Step 1/3: Extracting baseline statistics\n")
-  baseline_stats <- extract_baseline_stats(species_name, Haiti_adm3)
-  
-  # Extract monthly statistics
-  cat("Step 2/3: Extracting monthly statistics\n")
-  monthly_stats <- extract_monthly_stats(species_name, Haiti_adm3)
-  
-  # Create interactive map
-  cat("Step 3/3: Creating interactive map\n")
-  output_file <- file.path(output_dir, paste0(species_name, "_Interactive.html"))
-  
-  species_map <- create_interactive_map(
-    species_name = species_name,
-    shapefile = Haiti_adm3,
-    baseline_stats = baseline_stats,
-    monthly_stats = monthly_stats,
-    output_path = output_file
-  )
-  
-  cat(species_name, "processing complete\n")
-  cat("Output saved to:", output_file, "\n\n")
-}
+# Run all predictions
+results <- predict_all_species(
+  binary_ensembles = BRT_Bootstrap_Binary,
+  count_ensembles = BRT_Bootstrap_Count,
+  species_list = c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc"),
+  average_stack = AverageStack,
+  monthly_stacks = MonthlyStacks,
+  do_baseline = TRUE,
+  do_monthly = TRUE
+)
 
-cat("=======================================================================\n")
-cat("ALL SPECIES PROCESSING COMPLETE\n")
-cat("=======================================================================\n\n")
-cat("Output directory:", output_dir, "\n")
-cat("Total species processed:", length(species_mapping), "\n")
+
 ```
 
 
 
-```{r Interactive Leaflet Maps with Zonal Statistics}
+```{r Code for HTML Maps}
 # =============================================================================
-# MOSQUITO SPECIES INTERACTIVE MAP GENERATION - ALL SPECIES
+# INTERACTIVE LEAFLET MAPS WITH ZONAL STATISTICS
 # =============================================================================
+
 library(raster)
 library(terra)
 library(sf)
@@ -1370,11 +1580,10 @@ library(htmlwidgets)
 library(viridis)
 library(dplyr)
 
-cat("\n=======================================================================\n")
-cat("  CREATING INTERACTIVE MAPS FOR ALL SPECIES\n")
-cat("=======================================================================\n\n")
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
 
-# Configuration
 prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
 output_dir <- file.path(prediction_base, "Interactive_Maps")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1382,7 +1591,6 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 month_names <- c("January", "February", "March", "April", "May", "June",
                  "July", "August", "September", "October", "November", "December")
 
-# CORRECTED: Aem is Aedes mediovittatus, not Anopheles
 species_mapping <- c(
   "Aedes_aegypti" = "Aeae",
   "Aedes_albopictus" = "Aealb",
@@ -1392,17 +1600,70 @@ species_mapping <- c(
   "Psorophora_columbiae" = "Psc"
 )
 
-cat("Species to process:\n")
-for (i in 1:length(species_mapping)) {
-  cat("  ", names(species_mapping)[i], "\n", sep="")
+# =============================================================================
+# CUSTOM LEGEND FUNCTION
+# =============================================================================
+
+create_legend <- function(title = "Value", 
+                          min_val = 0, 
+                          max_val = 1,
+                          n_breaks = 5,
+                          decimals = 2) {
+  
+  colors <- viridis::plasma(100)
+  gradient_colors <- paste(colors, collapse = ", ")
+  
+  # Generate breaks with consistent formatting
+ breaks <- seq(min_val, max_val, length.out = n_breaks)
+  breaks_formatted <- sprintf(paste0("%.", decimals, "f"), breaks)
+  
+  legend_html <- tags$div(
+    class = "info legend",
+    style = "padding: 6px 8px; background: rgba(255,255,255,0.9);
+             border-radius: 5px; box-shadow: 0 0 15px rgba(0,0,0,0.2);
+             font: 12px/1.4 Arial, sans-serif; color: #555;",
+    
+    # Title
+    tags$div(
+      style = "text-align: center; margin-bottom: 5px; font-weight: bold;",
+      HTML(title)
+    ),
+    
+    # Legend body
+    tags$div(
+      style = "display: flex; align-items: center; justify-content: center;",
+      
+      # Gradient (bottom to top = low to high)
+      tags$div(
+        style = paste0(
+          "width: 18px; height: 90px; ",
+          "background: linear-gradient(to top, ", gradient_colors, "); ",
+          "margin-right: 5px;"
+        )
+      ),
+      
+      # Labels (high to low, top to bottom)
+      tags$div(
+        style = "display: flex; flex-direction: column; justify-content: space-between; 
+                 height: 90px; font-size: 11px;",
+        tags$span(breaks_formatted[5]),
+        tags$span(breaks_formatted[4]),
+        tags$span(breaks_formatted[3]),
+        tags$span(breaks_formatted[2]),
+        tags$span(breaks_formatted[1])
+      )
+    )
+  )
+  
+  return(legend_html)
 }
-cat("\n")
 
 # =============================================================================
 # EXTRACT BASELINE STATISTICS
 # =============================================================================
+
 extract_baseline_stats <- function(species_name, shapefile) {
-  cat("Extracting baseline statistics\n")
+  
   dir_name <- species_mapping[species_name]
   species_dir <- file.path(prediction_base, "Baseline", dir_name)
   
@@ -1413,87 +1674,67 @@ extract_baseline_stats <- function(species_name, shapefile) {
     ADM1_EN = shapefile$ADM1_EN
   )
   
-  # PRESENCE FILES (use Presence_Mean.tif, NOT Combined_Mean.tif)
+  # Presence mean
   presence_mean_path <- file.path(species_dir, paste0(dir_name, "_Presence_Mean.tif"))
-  cat("  Extracting:", basename(presence_mean_path), "\n")
   r <- rast(presence_mean_path)
   stats_df$presence_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                         "mean", progress = FALSE)
-  cat("    Range: [", round(min(stats_df$presence_mean, na.rm=TRUE), 4), ", ",
-      round(max(stats_df$presence_mean, na.rm=TRUE), 4), "]\n", sep="")
+                                          "mean", progress = FALSE)
   
   # Presence SD
   presence_sd_path <- file.path(species_dir, paste0(dir_name, "_Presence_SD.tif"))
   if (file.exists(presence_sd_path)) {
-    cat("  Extracting:", basename(presence_sd_path), "\n")
     r <- rast(presence_sd_path)
     stats_df$presence_sd <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                         "mean", progress = FALSE)
+                                          "mean", progress = FALSE)
   }
   
   # Presence CI
   presence_lower_path <- file.path(species_dir, paste0(dir_name, "_Presence_Lower95.tif"))
   if (file.exists(presence_lower_path)) {
-    cat("  Extracting:", basename(presence_lower_path), "\n")
     r <- rast(presence_lower_path)
     stats_df$presence_lower <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
+                                             "mean", progress = FALSE)
   }
   
   presence_upper_path <- file.path(species_dir, paste0(dir_name, "_Presence_Upper95.tif"))
   if (file.exists(presence_upper_path)) {
-    cat("  Extracting:", basename(presence_upper_path), "\n")
     r <- rast(presence_upper_path)
     stats_df$presence_upper <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
+                                             "mean", progress = FALSE)
   }
   
-  # ABUNDANCE FILES
+  # Abundance
   abundance_mean_path <- file.path(species_dir, paste0(dir_name, "_Abundance_Mean.tif"))
   if (file.exists(abundance_mean_path)) {
-    cat("  Extracting:", basename(abundance_mean_path), "\n")
     r <- rast(abundance_mean_path)
     stats_df$abundance_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
-    cat("    Range: [", round(min(stats_df$abundance_mean, na.rm=TRUE), 2), ", ",
-        round(max(stats_df$abundance_mean, na.rm=TRUE), 2), "]\n", sep="")
+                                             "mean", progress = FALSE)
     
     abundance_sd_path <- file.path(species_dir, paste0(dir_name, "_Abundance_SD.tif"))
     if (file.exists(abundance_sd_path)) {
-      cat("  Extracting:", basename(abundance_sd_path), "\n")
       r <- rast(abundance_sd_path)
       stats_df$abundance_sd <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                            "mean", progress = FALSE)
+                                             "mean", progress = FALSE)
     }
   }
   
-  cat("Baseline extraction complete\n\n")
   return(stats_df)
 }
 
 # =============================================================================
 # EXTRACT MONTHLY STATISTICS
 # =============================================================================
+
 extract_monthly_stats <- function(species_name, shapefile) {
-  cat("Extracting monthly statistics\n")
+  
   dir_name <- species_mapping[species_name]
   species_dir <- file.path(prediction_base, "Monthly", dir_name)
   
-  if (!dir.exists(species_dir)) {
-    cat("Monthly directory not found\n")
-    return(NULL)
-  }
+  if (!dir.exists(species_dir)) return(NULL)
   
-  monthly_stats <- list()
-  
-  for (month in month_names) {
+  monthly_stats <- lapply(month_names, function(month) {
     presence_path <- file.path(species_dir, paste0(dir_name, "_", month, "_Presence.tif"))
-    if (!file.exists(presence_path)) {
-      cat("  ", month, ": file not found, skipping\n")
-      next
-    }
-    
-    cat("  ", month, "\n", sep="")
+    if (!file.exists(presence_path)) return(NULL)
     
     month_df <- data.frame(
       ADM3_EN = shapefile$ADM3_EN,
@@ -1505,68 +1746,59 @@ extract_monthly_stats <- function(species_name, shapefile) {
     
     r <- rast(presence_path)
     month_df$presence_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                           "mean", progress = FALSE)
+                                            "mean", progress = FALSE)
     
-    # Abundance
+    # Abundance if available
     abundance_path <- file.path(species_dir, paste0(dir_name, "_", month, "_Abundance.tif"))
     if (file.exists(abundance_path)) {
       r <- rast(abundance_path)
       month_df$abundance_mean <- exact_extract(r, st_transform(shapefile, st_crs(crs(r, proj=TRUE))),
-                                              "mean", progress = FALSE)
+                                               "mean", progress = FALSE)
     }
     
-    monthly_stats[[month]] <- month_df
-  }
+    return(month_df)
+  })
   
-  cat("Monthly extraction complete (", length(monthly_stats), " months)\n\n", sep="")
+  names(monthly_stats) <- month_names
+  monthly_stats <- monthly_stats[!sapply(monthly_stats, is.null)]
+  
   return(monthly_stats)
 }
 
 # =============================================================================
 # CREATE INTERACTIVE MAP
 # =============================================================================
+
 create_interactive_map <- function(species_name, shapefile, baseline_stats,
-                                  monthly_stats, output_path) {
-  cat("Creating interactive map\n")
+                                   monthly_stats, output_path) {
   
   # Join baseline to shapefile
   map_data <- shapefile %>%
     left_join(baseline_stats, by = c("ADM3_EN", "ADM3_PCODE"))
   
-  # Verify presence is valid probability
-  cat("  Presence range: [", round(min(map_data$presence_mean, na.rm=TRUE), 4), ", ",
-      round(max(map_data$presence_mean, na.rm=TRUE), 4), "]\n", sep="")
-  
-  # Determine global max abundance for consistent scaling
+  # Global max abundance for consistent scaling
   max_abundance_baseline <- if("abundance_mean" %in% names(map_data)) {
-    max(map_data$abundance_mean, na.rm=TRUE)
-  } else {
-    0
-  }
+    max(map_data$abundance_mean, na.rm = TRUE)
+  } else { 0 }
   
   max_abundance_monthly <- 0
   if (!is.null(monthly_stats) && length(monthly_stats) > 0) {
-    for (month in names(monthly_stats)) {
-      if ("abundance_mean" %in% names(monthly_stats[[month]])) {
-        month_max <- max(monthly_stats[[month]]$abundance_mean, na.rm=TRUE)
-        if (month_max > max_abundance_monthly) {
-          max_abundance_monthly <- month_max
-        }
-      }
-    }
+    monthly_maxes <- sapply(monthly_stats, function(m) {
+      if ("abundance_mean" %in% names(m)) max(m$abundance_mean, na.rm = TRUE) else 0
+    })
+    max_abundance_monthly <- max(monthly_maxes, na.rm = TRUE)
   }
   
-  max_abundance_global <- max(max_abundance_baseline, max_abundance_monthly)
-  cat("  Global max abundance:", round(max_abundance_global, 2), "\n")
+  max_abundance_global <- max(max_abundance_baseline, max_abundance_monthly, na.rm = TRUE)
+  if (is.infinite(max_abundance_global) || max_abundance_global == 0) {
+    max_abundance_global <- 1
+  }
   
-  # Color palettes - ALL USE MAGMA, with fixed domains
-  presence_pal <- colorNumeric("magma", domain = c(0, 1), na.color = "transparent")
-  
-  has_abundance <- "abundance_mean" %in% names(map_data)
+  # Color palettes
+  presence_pal <- colorNumeric("plasma", domain = c(0, 1), na.color = "transparent")
+  has_abundance <- "abundance_mean" %in% names(map_data) && !all(is.na(map_data$abundance_mean))
   if (has_abundance) {
-    abundance_pal <- colorNumeric("magma",
-                                 domain = c(0, max_abundance_global),
-                                 na.color = "transparent")
+    abundance_pal <- colorNumeric("plasma", domain = c(0, max_abundance_global), na.color = "transparent")
   }
   
   # Initialize map
@@ -1576,7 +1808,6 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
     setView(lng = -72.3, lat = 19, zoom = 8)
   
   # Baseline Presence
-  cat("  Adding baseline presence layer\n")
   map <- map %>%
     addPolygons(
       fillColor = ~presence_pal(presence_mean),
@@ -1587,29 +1818,29 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
       smoothFactor = 0.5,
       layerId = ~ADM3_PCODE,
       group = "Baseline: Presence",
-      highlightOptions = highlightOptions(
-        weight = 2,
-        color = "#333",
-        fillOpacity = 0.9,
-        bringToFront = TRUE
-      ),
+      highlightOptions = highlightOptions(weight = 2, color = "#333", 
+                                          fillOpacity = 0.9, bringToFront = TRUE),
       popup = ~paste0(
         "<div style='font-family: Arial; font-size: 12px;'>",
         "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-        "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
+        "<span style='color: #666;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
         "<hr style='margin: 5px 0;'/>",
-        "<b>Presence Probability:</b> ", round(presence_mean, 4),
-        if("presence_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", round(presence_sd, 4)) else "",
+        "<b>Presence Probability:</b> ", sprintf("%.2f", presence_mean),
+        if("presence_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", sprintf("%.2f", presence_sd)) else "",
+        if("presence_lower" %in% names(map_data)) paste0("<br/><b>95% CI:</b> [", 
+           sprintf("%.2f", presence_lower), ", ", sprintf("%.2f", presence_upper), "]") else "",
         "</div>"
       )
     ) %>%
-    addLegend(pal = presence_pal, values = c(0, 1),
-             title = "Presence<br/>Probability", position = "bottomright",
-             group = "Baseline: Presence", layerId = "legend_baseline_presence")
+    addControl(
+      html = create_legend(title = "Presence<br/>Probability", min_val = 0, max_val = 1, 
+                           n_breaks = 5, decimals = 2),
+      position = "bottomright",
+      className = "legend-presence-baseline"
+    )
   
   # Baseline Abundance
   if (has_abundance) {
-    cat("  Adding baseline abundance layer\n")
     map <- map %>%
       addPolygons(
         data = map_data,
@@ -1621,31 +1852,22 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
         smoothFactor = 0.5,
         layerId = ~paste0(ADM3_PCODE, "_abund"),
         group = "Baseline: Abundance",
-        highlightOptions = highlightOptions(
-          weight = 2,
-          color = "#333",
-          fillOpacity = 0.9,
-          bringToFront = TRUE
-        ),
+        highlightOptions = highlightOptions(weight = 2, color = "#333",
+                                            fillOpacity = 0.9, bringToFront = TRUE),
         popup = ~paste0(
           "<div style='font-family: Arial; font-size: 12px;'>",
           "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-          "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
+          "<span style='color: #666;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span>",
           "<hr style='margin: 5px 0;'/>",
-          "<b>Expected Abundance:</b> ", round(abundance_mean, 2),
-          if("abundance_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", round(abundance_sd, 2)) else "",
+          "<b>Expected Abundance:</b> ", sprintf("%.1f", abundance_mean),
+          if("abundance_sd" %in% names(map_data)) paste0("<br/><b>SD:</b> ± ", sprintf("%.1f", abundance_sd)) else "",
           "</div>"
         )
-      ) %>%
-      addLegend(pal = abundance_pal, values = c(0, max_abundance_global),
-               title = "Expected<br/>Abundance", position = "bottomright",
-               group = "Baseline: Abundance", layerId = "legend_baseline_abundance")
+      )
   }
   
   # Monthly Layers
   if (!is.null(monthly_stats) && length(monthly_stats) > 0) {
-    cat("  Adding monthly layers (", length(monthly_stats), " months)\n", sep="")
-    
     for (month in names(monthly_stats)) {
       month_data <- monthly_stats[[month]]
       month_map_data <- shapefile %>%
@@ -1665,28 +1887,20 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
           smoothFactor = 0.5,
           layerId = ~paste0(ADM3_PCODE, "_", month, "_pres"),
           group = paste0("Monthly Presence: ", month),
-          highlightOptions = highlightOptions(
-            weight = 2,
-            color = "#333",
-            fillOpacity = 0.9,
-            bringToFront = TRUE
-          ),
+          highlightOptions = highlightOptions(weight = 2, color = "#333",
+                                              fillOpacity = 0.9, bringToFront = TRUE),
           popup = ~paste0(
             "<div style='font-family: Arial; font-size: 12px;'>",
             "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-            "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
-            "<b style='color: #e67e22;'>", month, " - Presence</b>",
+            "<span style='color: #666;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
+            "<b style='color: #e67e22;'>", month, "</b>",
             "<hr style='margin: 5px 0;'/>",
-            "<b>Presence Probability:</b> ", round(presence_mean, 4),
+            "<b>Presence Probability:</b> ", sprintf("%.2f", presence_mean),
             "</div>"
           )
-        ) %>%
-        addLegend(pal = presence_pal, values = c(0, 1),
-                 title = paste0(month, "<br/>Presence"), position = "bottomright",
-                 group = paste0("Monthly Presence: ", month),
-                 layerId = paste0("legend_", month, "_pres"))
+        )
       
-      # Monthly Abundance (if available)
+      # Monthly Abundance
       if (has_monthly_abundance) {
         map <- map %>%
           addPolygons(
@@ -1699,32 +1913,23 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
             smoothFactor = 0.5,
             layerId = ~paste0(ADM3_PCODE, "_", month, "_abund"),
             group = paste0("Monthly Abundance: ", month),
-            highlightOptions = highlightOptions(
-              weight = 2,
-              color = "#333",
-              fillOpacity = 0.9,
-              bringToFront = TRUE
-            ),
+            highlightOptions = highlightOptions(weight = 2, color = "#333",
+                                                fillOpacity = 0.9, bringToFront = TRUE),
             popup = ~paste0(
               "<div style='font-family: Arial; font-size: 12px;'>",
               "<b style='font-size: 14px;'>", ADM3_EN, "</b><br/>",
-              "<span style='color: #666; font-size: 11px;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
-              "<b style='color: #e67e22;'>", month, " - Abundance</b>",
+              "<span style='color: #666;'>", ADM2_EN.x, ", ", ADM1_EN.x, "</span><br/>",
+              "<b style='color: #e67e22;'>", month, "</b>",
               "<hr style='margin: 5px 0;'/>",
-              "<b>Expected Abundance:</b> ", round(abundance_mean, 2),
+              "<b>Expected Abundance:</b> ", sprintf("%.1f", abundance_mean),
               "</div>"
             )
-          ) %>%
-          addLegend(pal = abundance_pal, values = c(0, max_abundance_global),
-                   title = paste0(month, "<br/>Abundance"), position = "bottomright",
-                   group = paste0("Monthly Abundance: ", month),
-                   layerId = paste0("legend_", month, "_abund"))
+          )
       }
     }
   }
   
   # Layer Controls
-  cat("  Adding controls\n")
   base_groups <- c("Baseline: Presence")
   if (has_abundance) base_groups <- c(base_groups, "Baseline: Abundance")
   
@@ -1742,25 +1947,18 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
     hideGroup(c(monthly_presence_groups, monthly_abundance_groups)) %>%
     hideGroup(if(has_abundance) "Baseline: Abundance" else NULL)
   
-  # Title - Using CSS font-style for italics
+  # Title
   species_formatted <- gsub("_", " ", species_name)
   title_control <- tags$div(
     style = "margin: 10px; padding: 12px 20px; background: white;
-             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-             display: inline-block;",
-    tags$h3(
-      style = "margin: 0; font-size: 18px; font-style: italic;",
-      species_formatted
-    )
+             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);",
+    tags$h3(style = "margin: 0; font-size: 18px; font-style: italic;", species_formatted)
   )
   
-  map <- map %>%
-    addControl(title_control, position = "topleft")
+  map <- map %>% addControl(title_control, position = "topleft")
   
   # Save
-  cat("  Saving to:", basename(output_path), "\n")
   saveWidget(map, output_path, selfcontained = TRUE)
-  cat("Map created successfully\n\n")
   
   return(map)
 }
@@ -1768,36 +1966,20 @@ create_interactive_map <- function(species_name, shapefile, baseline_stats,
 # =============================================================================
 # PROCESS ALL SPECIES
 # =============================================================================
-cat("=======================================================================\n")
-cat("PROCESSING ALL SPECIES\n")
-cat("=======================================================================\n\n")
 
-species_count <- 0
-species_total <- length(species_mapping)
+cat("\n=== GENERATING INTERACTIVE MAPS ===\n\n")
 
-for (species_name in names(species_mapping)) {
-  species_count <- species_count + 1
+for (i in seq_along(species_mapping)) {
+  species_name <- names(species_mapping)[i]
+  cat("[", i, "/", length(species_mapping), "] ", species_name, "...\n", sep = "")
   
-  cat("=======================================================================\n")
-  cat("STEP ", species_count, " OF ", species_total, ": ", species_name, "\n", sep="")
-  cat("=======================================================================\n\n")
-  
-  # Step 1: Extract baseline statistics
-  cat("STEP 1: Extract baseline statistics\n")
-  cat("-----------------------------------------------------------------------\n")
+  # Extract statistics
   baseline_stats <- extract_baseline_stats(species_name, Haiti_adm3)
-  
-  # Step 2: Extract monthly statistics
-  cat("STEP 2: Extract monthly statistics\n")
-  cat("-----------------------------------------------------------------------\n")
   monthly_stats <- extract_monthly_stats(species_name, Haiti_adm3)
   
-  # Step 3: Create interactive map
-  cat("STEP 3: Create interactive map\n")
-  cat("-----------------------------------------------------------------------\n")
-  output_file <- file.path(output_dir, paste0(species_name, "_Interactive.html"))
-  
-  species_map <- create_interactive_map(
+  # Create map
+    output_file <- file.path(output_dir, paste0(species_mapping[species_name], "Map.html"))
+  create_interactive_map(
     species_name = species_name,
     shapefile = Haiti_adm3,
     baseline_stats = baseline_stats,
@@ -1805,19 +1987,1167 @@ for (species_name in names(species_mapping)) {
     output_path = output_file
   )
   
-  cat("COMPLETED: ", species_name, "\n", sep="")
-  cat("Output file: ", output_file, "\n\n", sep="")
+  cat("    Saved:", basename(output_file), "\n")
 }
 
-cat("=======================================================================\n")
-cat("ALL SPECIES PROCESSING COMPLETE\n")
+cat("\n=== COMPLETE ===\n")
+cat("Output:", output_dir, "\n")
+cat("Species processed:", length(species_mapping), "\n")
+```
+
+
+
+```{r Study-site Prediction Maps}
+# =============================================================================
+# BASELINE PREDICTION MAPS - STUDY SITES (6 SPECIES)
+# =============================================================================
+# Generates 4 figures:
+#   1. Presence Probability (Mean)
+#   2. Presence Probability (SD)
+#   3. Expected Abundance (Mean)
+#   4. Expected Abundance (SD)
+# =============================================================================
+library(terra)
+library(sf)
+library(ggplot2)
+library(viridis)
+library(patchwork)
+sf_use_s2(FALSE)
+# Configuration
+prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
+species_info <- list(
+  Aeae  = list(dir = "Aeae",  label = "Aedes aegypti"),
+  Aealb = list(dir = "Aealb", label = "Aedes albopictus"),
+  Aem   = list(dir = "Aem",   label = "Aedes mediovittatus"),
+  Cxn   = list(dir = "Cxn",   label = "Culex nigripalpus"),
+  Quinx = list(dir = "Quinx", label = "Culex quinquefasciatus"),
+  Psc   = list(dir = "Psc",   label = "Psorophora columbiae")
+)
+# Spatial setup
+study_area <- vect(adm2_flagged)
+study_area_buffered <- buffer(study_area, width = 1000)
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+load_and_process_raster <- function(species_dir, file_suffix) {
+  raster_path <- file.path(prediction_base, "Baseline", species_dir,
+                           paste0(species_dir, file_suffix))
+  if (!file.exists(raster_path)) return(NULL)
+  r <- rast(raster_path)
+  r_crop <- crop(r, study_area_buffered)
+  # Fill edge gaps
+r_filled <- focal(r_crop, w = 3, fun = "mean", na.policy = "only", na.rm = TRUE)
+  r_filled <- focal(r_filled, w = 5, fun = "mean", na.policy = "only", na.rm = TRUE)
+  mask(r_filled, study_area)
+}
+raster_to_df <- function(r) {
+  if (is.null(r)) return(NULL)
+  as.data.frame(r, xy = TRUE, na.rm = TRUE)
+}
+make_panel <- function(df, species_label, max_val, legend_title, show_legend = FALSE) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(ggplot() + annotate("text", x = 0.5, y = 0.5, label = "No data") + theme_void())
+  }
+  val_col <- names(df)[3]
+  ggplot() +
+    geom_raster(data = df, aes(x = x, y = y, fill = .data[[val_col]])) +
+    geom_sf(data = adm2_flagged, fill = NA, color = "white", linewidth = 0.8) +
+    geom_sf(data = adm2_flagged, fill = NA, color = "black", linewidth = 0.5) +
+    scale_fill_viridis_c(option = "plasma", limits = c(0, max_val), name = legend_title) +
+    coord_sf(expand = FALSE) +
+    theme_minimal() +
+    theme(
+      axis.text = element_blank(),
+      axis.title = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "italic", size = 10, hjust = 0.5),
+      legend.position = if(show_legend) "right" else "none",
+      panel.background = element_rect(fill = "white", color = NA)
+    ) +
+    labs(title = species_label)
+}
+build_6panel_figure <- function(panels, fig_title) {
+  (panels$Aeae | panels$Aealb | panels$Aem) /
+  (panels$Cxn | panels$Quinx | panels$Psc) +
+    plot_annotation(
+      title = fig_title,
+      theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+    )
+}
+# =============================================================================
+# LOAD ALL RASTERS
+# =============================================================================
+cat("Loading rasters...\n")
+rasters <- list(
+  presence_mean = list(),
+  presence_sd = list(),
+  abundance_mean = list(),
+  abundance_sd = list()
+)
+for (sp in names(species_info)) {
+  cat("  ", species_info[[sp]]$label, "\n")
+  rasters$presence_mean[[sp]] <- load_and_process_raster(species_info[[sp]]$dir, "_Presence_Mean.tif")
+  rasters$presence_sd[[sp]] <- load_and_process_raster(species_info[[sp]]$dir, "_Presence_SD.tif")
+  rasters$abundance_mean[[sp]] <- load_and_process_raster(species_info[[sp]]$dir, "_Abundance_Mean.tif")
+  rasters$abundance_sd[[sp]] <- load_and_process_raster(species_info[[sp]]$dir, "_Abundance_SD.tif")
+}
+# Calculate global max values for consistent scaling
+get_global_max <- function(raster_list) {
+  max(sapply(raster_list, function(r) {
+    if (is.null(r)) return(0)
+    max(values(r), na.rm = TRUE)
+  }), na.rm = TRUE)
+}
+max_presence_sd <- get_global_max(rasters$presence_sd)
+max_abundance_mean <- get_global_max(rasters$abundance_mean)
+max_abundance_sd <- get_global_max(rasters$abundance_sd)
+cat("Max values - Presence SD:", round(max_presence_sd, 3),
+    "| Abundance Mean:", round(max_abundance_mean, 2),
+    "| Abundance SD:", round(max_abundance_sd, 2), "\n")
+# =============================================================================
+# FIGURE 1: PRESENCE PROBABILITY (MEAN)
+# =============================================================================
+cat("\nGenerating Presence Mean figure...\n")
+panels_pres_mean <- lapply(names(species_info), function(sp) {
+  df <- raster_to_df(rasters$presence_mean[[sp]])
+  make_panel(df, species_info[[sp]]$label, max_val = 1,
+             legend_title = "Presence\nProbability", show_legend = (sp == "Psc"))
+})
+names(panels_pres_mean) <- names(species_info)
+fig_presence_mean <- build_6panel_figure(panels_pres_mean,
+                                          "Baseline Presence Probability - Study Sites")
+print(fig_presence_mean)
+# =============================================================================
+# FIGURE 2: PRESENCE PROBABILITY (SD)
+# =============================================================================
+cat("Generating Presence SD figure...\n")
+panels_pres_sd <- lapply(names(species_info), function(sp) {
+  df <- raster_to_df(rasters$presence_sd[[sp]])
+  make_panel(df, species_info[[sp]]$label, max_val = max_presence_sd,
+             legend_title = "Presence\nSD", show_legend = (sp == "Psc"))
+})
+names(panels_pres_sd) <- names(species_info)
+fig_presence_sd <- build_6panel_figure(panels_pres_sd,
+                                        "Baseline Presence Probability Uncertainty (SD) - Study Sites")
+print(fig_presence_sd)
+# =============================================================================
+# FIGURE 3: EXPECTED ABUNDANCE (MEAN)
+# =============================================================================
+cat("Generating Abundance Mean figure...\n")
+panels_abund_mean <- lapply(names(species_info), function(sp) {
+  df <- raster_to_df(rasters$abundance_mean[[sp]])
+  make_panel(df, species_info[[sp]]$label, max_val = max_abundance_mean,
+             legend_title = "Expected\nAbundance", show_legend = (sp == "Psc"))
+})
+names(panels_abund_mean) <- names(species_info)
+fig_abundance_mean <- build_6panel_figure(panels_abund_mean,
+                                           "Baseline Expected Abundance - Study Sites")
+print(fig_abundance_mean)
+# =============================================================================
+# FIGURE 4: EXPECTED ABUNDANCE (SD)
+# =============================================================================
+cat("Generating Abundance SD figure...\n")
+panels_abund_sd <- lapply(names(species_info), function(sp) {
+  df <- raster_to_df(rasters$abundance_sd[[sp]])
+  make_panel(df, species_info[[sp]]$label, max_val = max_abundance_sd,
+             legend_title = "Abundance\nSD", show_legend = (sp == "Psc"))
+})
+names(panels_abund_sd) <- names(species_info)
+fig_abundance_sd <- build_6panel_figure(panels_abund_sd,
+                                         "Baseline Expected Abundance Uncertainty (SD) - Study Sites")
+print(fig_abundance_sd)
+cat("\n=== All figures generated ===\n")
+```
+
+
+
+```{r BRT Plots}
+
+# =============================================================================
+# AVERAGED PARTIAL DEPENDENCY PLOTS FROM BOOTSTRAP BRT ENSEMBLES
+# =============================================================================
+# Creates consensus partial dependency plots averaged across 100 bootstrap models
+# Separate plots for each species, model type (presence/abundance), and variable
+# Uses plasma color scheme with different colors per variable
+# =============================================================================
+
+library(dismo)
+library(gbm)
+library(ggplot2)
+library(viridis)
+library(dplyr)
+library(purrr)
+
+cat("\n=======================================================================\n")
+cat("  PARTIAL DEPENDENCY PLOT GENERATION\n")
 cat("=======================================================================\n\n")
-cat("Output directory: ", output_dir, "\n", sep="")
-cat("Total species processed: ", species_total, "\n", sep="")
+
+# Configuration
+output_dir <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Figures/PDPlots"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Variable mapping (requested names -> actual covariate names)
+variable_mapping <- c(
+  "Built Area" = "LC_built",
+  "Cropland" = "LC_cropland",
+  "Elevation" = "Elevation",
+  "Precipitation" = "Precip",
+  "Shrub Cover" = "LC_shrubs",
+  "Temperature" = "TMean",
+  "Wind Speed" = "WindMean"
+)
+
+# Species mapping (FIXED)
+species_mapping <- c(
+  "Aeae" = "Aedes aegypti",
+  "Aealb" = "Aedes albopictus",
+  "Quinx" = "Culex quinquefasciatus",
+  "Aem" = "Aedes mediovittatus",
+  "Cxn" = "Culex nigripalpus",
+  "Psc" = "Psorophora columbiae"
+)
+
+# Assign colors from plasma palette
+plasma_colors <- viridis::plasma(length(variable_mapping))
+names(plasma_colors) <- names(variable_mapping)
+
+cat("Output directory:", output_dir, "\n")
+cat("Variables to plot:", length(variable_mapping), "\n\n")
+
+# =============================================================================
+# FUNCTION: Extract partial dependency data from single model
+# =============================================================================
+
+extract_pdp_single_model <- function(model, variable_name, n_points = 100) {
+  
+  var_idx <- which(model$gbm.call$predictor.names == variable_name)
+  
+  if (length(var_idx) == 0) {
+    return(NULL)
+  }
+  
+  data_used <- model$gbm.call$dataframe
+  var_range <- range(data_used[[variable_name]], na.rm = TRUE)
+  
+  var_seq <- seq(var_range[1], var_range[2], length.out = n_points)
+  
+  pd_pred <- plot.gbm(
+    model,
+    i.var = var_idx,
+    n.trees = model$gbm.call$best.trees,
+    continuous.resolution = n_points,
+    return.grid = TRUE,
+    type = "response"
+  )
+  
+  result <- data.frame(
+    x = pd_pred[[1]],
+    y = pd_pred$y
+  )
+  
+  return(result)
+}
+
+# =============================================================================
+# FUNCTION: Average partial dependency across bootstrap ensemble
+# =============================================================================
+
+extract_pdp_ensemble <- function(bootstrap_ensemble, variable_name, 
+                                 n_points = 100, verbose = TRUE) {
+  
+  if (is.null(bootstrap_ensemble)) {
+    if (verbose) cat("    No ensemble available\n")
+    return(NULL)
+  }
+  
+  models <- bootstrap_ensemble$models
+  covariates <- bootstrap_ensemble$covariates
+  
+  actual_var_name <- variable_mapping[variable_name]
+  
+  if (!actual_var_name %in% covariates) {
+    if (verbose) cat("    Variable not in model:", variable_name, "\n")
+    return(NULL)
+  }
+  
+  if (verbose) cat("    Extracting PDP for", variable_name, "...")
+  
+  pdp_list <- lapply(models, function(m) {
+    tryCatch(
+      extract_pdp_single_model(m, actual_var_name, n_points),
+      error = function(e) NULL
+    )
+  })
+  
+  pdp_list <- pdp_list[!sapply(pdp_list, is.null)]
+  
+  if (length(pdp_list) == 0) {
+    if (verbose) cat(" FAILED\n")
+    return(NULL)
+  }
+  
+  all_x <- unlist(lapply(pdp_list, function(df) df$x))
+  x_range <- range(all_x, na.rm = TRUE)
+  x_common <- seq(x_range[1], x_range[2], length.out = n_points)
+  
+  y_matrix <- sapply(pdp_list, function(df) {
+    approx(df$x, df$y, xout = x_common, rule = 2)$y
+  })
+  
+  y_mean <- rowMeans(y_matrix, na.rm = TRUE)
+  y_sd <- apply(y_matrix, 1, sd, na.rm = TRUE)
+  y_lower <- apply(y_matrix, 1, quantile, probs = 0.025, na.rm = TRUE)
+  y_upper <- apply(y_matrix, 1, quantile, probs = 0.975, na.rm = TRUE)
+  
+  result <- data.frame(
+    x = x_common,
+    y_mean = y_mean,
+    y_sd = y_sd,
+    y_lower = y_lower,
+    y_upper = y_upper,
+    n_models = ncol(y_matrix)
+  )
+  
+  if (verbose) cat(" ", ncol(y_matrix), "models\n")
+  
+  return(result)
+}
+
+# =============================================================================
+# FUNCTION: Create partial dependency plot
+# =============================================================================
+
+create_pdp_plot <- function(pdp_data, variable_name, species_name, 
+                           model_type, color) {
+  
+  if (is.null(pdp_data)) {
+    return(NULL)
+  }
+  
+  y_label <- if (model_type == "Presence") {
+    "Probability of Presence"
+  } else {
+    "Expected Abundance"
+  }
+  
+  species_formatted <- gsub("_", " ", species_name)
+  
+  p <- ggplot(pdp_data, aes(x = x, y = y_mean)) +
+    geom_ribbon(aes(ymin = y_lower, ymax = y_upper),
+                fill = color, alpha = 0.2) +
+    geom_line(color = color, size = 1.2) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "italic", size = 14, hjust = 0.5),
+      panel.grid.minor = element_blank(),
+      axis.title = element_text(size = 11),
+      axis.text = element_text(size = 10)
+    ) +
+    labs(
+      title = species_formatted,
+      x = variable_name,
+      y = y_label
+    )
+  
+  return(p)
+}
+
+# =============================================================================
+# FUNCTION: Process all variables for one species/model combination
+# =============================================================================
+
+process_species_model <- function(species_code, model_type,
+                                  bootstrap_ensemble,
+                                  output_dir) {
+  
+  species_name <- species_mapping[species_code]
+  
+  cat("\n", species_name, " - ", model_type, "\n", sep = "")
+  cat("  ", strrep("-", nchar(species_name) + nchar(model_type) + 3), "\n", sep = "")
+  
+  if (is.null(bootstrap_ensemble)) {
+    cat("  No ensemble available - skipping\n")
+    return(NULL)
+  }
+  
+  species_dir <- file.path(output_dir, species_code, model_type)
+  dir.create(species_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  for (var_name in names(variable_mapping)) {
+    
+    pdp_data <- extract_pdp_ensemble(
+      bootstrap_ensemble, 
+      var_name,
+      n_points = 100,
+      verbose = TRUE
+    )
+    
+    if (!is.null(pdp_data)) {
+      plot_obj <- create_pdp_plot(
+        pdp_data,
+        variable_name = var_name,
+        species_name = species_name,
+        model_type = model_type,
+        color = plasma_colors[var_name]
+      )
+      
+      filename <- file.path(
+        species_dir,
+        paste0(species_code, "_", model_type, "_", 
+               gsub(" ", "_", var_name), ".png")
+      )
+      
+      ggsave(
+        filename,
+        plot = plot_obj,
+        width = 6,
+        height = 5,
+        dpi = 300,
+        bg = "white"
+      )
+      
+      data_filename <- file.path(
+        species_dir,
+        paste0(species_code, "_", model_type, "_", 
+               gsub(" ", "_", var_name), "_data.csv")
+      )
+      
+      write.csv(pdp_data, data_filename, row.names = FALSE)
+    }
+  }
+  
+  cat("\n")
+}
+
+# =============================================================================
+# FUNCTION: Create combined multi-panel plot for one species
+# =============================================================================
+
+create_combined_pdp_plot <- function(species_code, model_type,
+                                     bootstrap_ensemble,
+                                     output_dir) {
+  
+  species_name <- species_mapping[species_code]
+  
+  if (is.null(bootstrap_ensemble)) {
+    return(NULL)
+  }
+  
+  pdp_list <- list()
+  
+  for (var_name in names(variable_mapping)) {
+    pdp_data <- extract_pdp_ensemble(
+      bootstrap_ensemble,
+      var_name,
+      n_points = 100,
+      verbose = FALSE
+    )
+    
+    if (!is.null(pdp_data)) {
+      pdp_data$variable <- var_name
+      pdp_data$color <- plasma_colors[var_name]
+      pdp_list[[var_name]] <- pdp_data
+    }
+  }
+  
+  if (length(pdp_list) == 0) {
+    return(NULL)
+  }
+  
+  pdp_combined <- bind_rows(pdp_list)
+  
+  y_label <- if (model_type == "Presence") {
+    "Probability of Presence"
+  } else {
+    "Expected Abundance"
+  }
+  
+  species_formatted <- gsub("_", " ", species_name)
+  
+  p <- ggplot(pdp_combined, aes(x = x, y = y_mean)) +
+    geom_ribbon(aes(ymin = y_lower, ymax = y_upper, fill = variable),
+                alpha = 0.2) +
+    geom_line(aes(color = variable), size = 1) +
+    facet_wrap(~variable, scales = "free_x", ncol = 3) +
+    scale_color_manual(values = plasma_colors) +
+    scale_fill_manual(values = plasma_colors) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "italic", size = 14, hjust = 0.5),
+      strip.text = element_text(size = 10, face = "bold"),
+      legend.position = "none",
+      panel.grid.minor = element_blank()
+    ) +
+    labs(
+      title = paste(species_formatted, "-", model_type),
+      x = "Covariate Value",
+      y = y_label
+    )
+  
+  return(p)
+}
+
+# =============================================================================
+# BATCH PROCESSING: All species and model types
+# =============================================================================
+
+cat("=======================================================================\n")
+cat("PROCESSING ALL SPECIES AND MODEL TYPES\n")
+cat("=======================================================================\n")
+
+species_list <- c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc")
+
+total_start <- Sys.time()
+
+for (species_code in species_list) {
+  
+  cat("\n***********************************************************************\n")
+  cat("SPECIES:", species_mapping[species_code], "\n")
+  cat("***********************************************************************\n")
+  
+  if (!is.null(BRT_Bootstrap_Binary[[species_code]])) {
+    process_species_model(
+      species_code = species_code,
+      model_type = "Presence",
+      bootstrap_ensemble = BRT_Bootstrap_Binary[[species_code]],
+      output_dir = output_dir
+    )
+    
+    combined_plot <- create_combined_pdp_plot(
+      species_code = species_code,
+      model_type = "Presence",
+      bootstrap_ensemble = BRT_Bootstrap_Binary[[species_code]],
+      output_dir = output_dir
+    )
+    
+    if (!is.null(combined_plot)) {
+      combined_filename <- file.path(
+        output_dir,
+        species_code,
+        paste0(species_code, "_Presence_Combined.png")
+      )
+      
+      ggsave(
+        combined_filename,
+        plot = combined_plot,
+        width = 12,
+        height = 8,
+        dpi = 300,
+        bg = "white"
+      )
+      
+      cat("  Combined presence plot saved\n")
+    }
+  }
+  
+  if (!is.null(BRT_Bootstrap_Count[[species_code]])) {
+    process_species_model(
+      species_code = species_code,
+      model_type = "Abundance",
+      bootstrap_ensemble = BRT_Bootstrap_Count[[species_code]],
+      output_dir = output_dir
+    )
+    
+    combined_plot <- create_combined_pdp_plot(
+      species_code = species_code,
+      model_type = "Abundance",
+      bootstrap_ensemble = BRT_Bootstrap_Count[[species_code]],
+      output_dir = output_dir
+    )
+    
+    if (!is.null(combined_plot)) {
+      combined_filename <- file.path(
+        output_dir,
+        species_code,
+        paste0(species_code, "_Abundance_Combined.png")
+      )
+      
+      ggsave(
+        combined_filename,
+        plot = combined_plot,
+        width = 12,
+        height = 8,
+        dpi = 300,
+        bg = "white"
+      )
+      
+      cat("  Combined abundance plot saved\n")
+    }
+  }
+}
+
+total_elapsed <- difftime(Sys.time(), total_start, units = "mins")
+
+cat("\n=======================================================================\n")
+cat("PARTIAL DEPENDENCY PLOT GENERATION COMPLETE\n")
+cat("=======================================================================\n\n")
+
+
 
 ```
 
 
+
+```{r Monthly BRT stats}
+
+# =============================================================================
+# SPATIAL STATISTICS EXTRACTION - BASELINE AND MONTHLY PREDICTIONS
+# =============================================================================
+
+library(terra)
+library(dplyr)
+library(tidyr)
+
+# Configuration
+prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
+
+species_info <- data.frame(
+  species_code = c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc"),
+  species_name = c("Aedes_aegypti", "Aedes_albopictus", "Culex_quinquefasciatus",
+                   "Aedes_mediovittatus", "Culex_nigripalpus", "Psorophora_columbiae"),
+  stringsAsFactors = FALSE
+)
+
+month_names <- c("January", "February", "March", "April", "May", "June",
+                 "July", "August", "September", "October", "November", "December")
+
+# =============================================================================
+# HELPER FUNCTION - EXTRACT SPATIAL STATISTICS
+# =============================================================================
+
+extract_spatial_stats <- function(raster_path) {
+  if (!file.exists(raster_path)) {
+    return(data.frame(mean = NA, median = NA, sd = NA))
+  }
+  
+  r <- rast(raster_path)
+  vals <- values(r, na.rm = TRUE)
+  
+  data.frame(
+    mean = mean(vals, na.rm = TRUE),
+    median = median(vals, na.rm = TRUE),
+    sd = sd(vals, na.rm = TRUE)
+  )
+}
+
+# =============================================================================
+# EXTRACT BASELINE STATISTICS
+# =============================================================================
+
+extract_baseline_stats <- function(species_code, metric_type) {
+  
+  file_suffix <- switch(metric_type,
+                       "presence" = "_Presence_Mean.tif",
+                       "abundance" = "_Abundance_Mean.tif")
+  
+  raster_path <- file.path(prediction_base, "Baseline", species_code,
+                           paste0(species_code, file_suffix))
+  
+  stats <- extract_spatial_stats(raster_path)
+  stats$species_code <- species_code
+  stats$period <- "Baseline"
+  stats$metric <- metric_type
+  
+  return(stats)
+}
+
+# =============================================================================
+# EXTRACT MONTHLY STATISTICS
+# =============================================================================
+
+extract_monthly_stats <- function(species_code, month, metric_type) {
+  
+  file_suffix <- switch(metric_type,
+                       "presence" = paste0("_", month, "_Presence.tif"),
+                       "abundance" = paste0("_", month, "_Abundance.tif"))
+  
+  raster_path <- file.path(prediction_base, "Monthly", species_code,
+                           paste0(species_code, file_suffix))
+  
+  stats <- extract_spatial_stats(raster_path)
+  stats$species_code <- species_code
+  stats$period <- month
+  stats$metric <- metric_type
+  
+  return(stats)
+}
+
+# =============================================================================
+# COMPILE ALL STATISTICS
+# =============================================================================
+
+cat("Extracting spatial statistics...\n")
+
+all_stats <- lapply(species_info$species_code, function(sp) {
+  
+  # Baseline presence
+  baseline_pres <- extract_baseline_stats(sp, "presence")
+  
+  # Baseline abundance
+  baseline_abund <- extract_baseline_stats(sp, "abundance")
+  
+  # Monthly presence
+  monthly_pres <- lapply(month_names, function(m) {
+    extract_monthly_stats(sp, m, "presence")
+  })
+  monthly_pres <- do.call(rbind, monthly_pres)
+  
+  # Monthly abundance
+  monthly_abund <- lapply(month_names, function(m) {
+    extract_monthly_stats(sp, m, "abundance")
+  })
+  monthly_abund <- do.call(rbind, monthly_abund)
+  
+  rbind(baseline_pres, baseline_abund, monthly_pres, monthly_abund)
+})
+
+stats_table <- do.call(rbind, all_stats)
+
+# Add species names
+stats_table <- stats_table %>%
+  left_join(species_info, by = "species_code") %>%
+  dplyr::select(species_name, species_code, period, metric, mean, median, sd)
+
+# =============================================================================
+# CREATE WIDE FORMAT TABLES (EASIER TO READ)
+# =============================================================================
+
+# Presence table
+presence_wide <- stats_table %>%
+  filter(metric == "presence") %>%
+  dplyr::select(-metric) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = c(mean, median, sd),
+    names_glue = "{period}_{.value}"
+  ) %>%
+  dplyr::select(species_name, species_code,
+                Baseline_mean, Baseline_median, Baseline_sd,
+                everything())
+
+# Abundance table
+abundance_wide <- stats_table %>%
+  filter(metric == "abundance") %>%
+  dplyr::select(-metric) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = c(mean, median, sd),
+    names_glue = "{period}_{.value}"
+  ) %>%
+  dplyr::select(species_name, species_code,
+                Baseline_mean, Baseline_median, Baseline_sd,
+                everything())
+
+# =============================================================================
+# SAVE OUTPUTS
+# =============================================================================
+
+output_dir <- file.path(prediction_base, "Summary_Statistics")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Long format (all data in one table)
+write.csv(stats_table, 
+          file.path(output_dir, "Spatial_Statistics_Long.csv"),
+          row.names = FALSE)
+
+# Wide format - Presence
+write.csv(presence_wide,
+          file.path(output_dir, "Spatial_Statistics_Presence.csv"),
+          row.names = FALSE)
+
+# Wide format - Abundance
+write.csv(abundance_wide,
+          file.path(output_dir, "Spatial_Statistics_Abundance.csv"),
+          row.names = FALSE)
+
+cat("\nSummary statistics saved to:", output_dir, "\n")
+cat("  - Spatial_Statistics_Long.csv (all data)\n")
+cat("  - Spatial_Statistics_Presence.csv (wide format)\n")
+cat("  - Spatial_Statistics_Abundance.csv (wide format)\n")
+
+# =============================================================================
+# PREVIEW RESULTS
+# =============================================================================
+
+cat("\nPresence Statistics Preview (Baseline):\n")
+print(stats_table %>% 
+        filter(metric == "presence", period == "Baseline") %>%
+        dplyr::select(species_name, mean, median, sd),
+      row.names = FALSE)
+
+cat("\nAbundance Statistics Preview (Baseline):\n")
+print(stats_table %>% 
+        filter(metric == "abundance", period == "Baseline") %>%
+        dplyr::select(species_name, mean, median, sd),
+      row.names = FALSE)
+
+```
+
+
+
+```{r Comprehensive Summary Table for All Species}
+
+# =============================================================================
+# COMPREHENSIVE SUMMARY STATISTICS TABLE
+# All Six Species by Trap Type and Overall Study Period
+# =============================================================================
+
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+
+# Species configuration
+species_list <- c("Quinx", "Aeae", "Aealb", "Aem", "Cxn", "Psc")
+species_names <- c(
+  "Culex quinquefasciatus",
+  "Aedes aegypti", 
+  "Aedes albopictus",
+  "Aedes mediovittatus",
+  "Culex nigripalpus",
+  "Psorophora columbiae"
+)
+
+# =============================================================================
+# Calculate summary statistics for each species
+# =============================================================================
+
+calculate_species_summary <- function(species_col, trap_type_col = "Trap_Type") {
+  
+  # By trap type
+  by_trap <- HCM_Full_Aeae %>%
+    group_by(Trap_Type = !!sym(trap_type_col)) %>%
+    summarise(
+      Total = sum(!!sym(species_col), na.rm = TRUE),
+      Mean = mean(!!sym(species_col), na.rm = TRUE),
+      Median = median(!!sym(species_col), na.rm = TRUE),
+      SD = sd(!!sym(species_col), na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  # Overall (all trap types combined)
+  overall <- HCM_Full_Aeae %>%
+    summarise(
+      Trap_Type = "All Traps",
+      Total = sum(!!sym(species_col), na.rm = TRUE),
+      Mean = mean(!!sym(species_col), na.rm = TRUE),
+      Median = median(!!sym(species_col), na.rm = TRUE),
+      SD = sd(!!sym(species_col), na.rm = TRUE)
+    )
+  
+  # Combine
+  bind_rows(by_trap, overall)
+}
+
+# Generate summary for each species
+summary_list <- list()
+
+for (i in seq_along(species_list)) {
+  species <- species_list[i]
+  species_name <- species_names[i]
+  
+  summary_stats <- calculate_species_summary(species)
+  summary_stats$Species <- species_name
+  
+  summary_list[[species]] <- summary_stats
+}
+
+# Combine all species
+all_species_summary <- bind_rows(summary_list) %>%
+  dplyr::select(Species, Trap_Type, Total, Mean, Median, SD)
+
+# =============================================================================
+# Calculate combined totals across all species
+# =============================================================================
+
+# Create total counts column
+HCM_Full_Aeae_with_total <- HCM_Full_Aeae %>%
+  mutate(Total_All_Species = Quinx + Aeae + Aealb + Aem + Cxn + Psc)
+
+# By trap type
+combined_by_trap <- HCM_Full_Aeae_with_total %>%
+  group_by(Trap_Type) %>%
+  summarise(
+    Total = sum(Total_All_Species, na.rm = TRUE),
+    Mean = mean(Total_All_Species, na.rm = TRUE),
+    Median = median(Total_All_Species, na.rm = TRUE),
+    SD = sd(Total_All_Species, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Overall
+combined_overall <- HCM_Full_Aeae_with_total %>%
+  summarise(
+    Trap_Type = "All Traps",
+    Total = sum(Total_All_Species, na.rm = TRUE),
+    Mean = mean(Total_All_Species, na.rm = TRUE),
+    Median = median(Total_All_Species, na.rm = TRUE),
+    SD = sd(Total_All_Species, na.rm = TRUE)
+  )
+
+combined_summary <- bind_rows(combined_by_trap, combined_overall) %>%
+  mutate(Species = "All Species Combined") %>%
+  dplyr::select(Species, Trap_Type, Total, Mean, Median, SD)
+
+# Add to main summary
+all_species_summary <- bind_rows(all_species_summary, combined_summary)
+
+# =============================================================================
+# Format table
+# =============================================================================
+
+# Round numeric columns
+summary_table_formatted <- all_species_summary %>%
+  mutate(
+    Mean = round(Mean, 2),
+    Median = round(Median, 2),
+    SD = round(SD, 2)
+  )
+
+# Reorder to put "All Traps" at bottom of each species group
+summary_table_formatted <- summary_table_formatted %>%
+  arrange(
+    factor(Species, levels = c(species_names, "All Species Combined")),
+    factor(Trap_Type, levels = c("BG- Sentinel", "CDC Gravid", "CDC LT", "All Traps"))
+  )
+
+# =============================================================================
+# Create beautiful HTML table
+# =============================================================================
+
+html_table <- summary_table_formatted %>%
+  kable(
+    format = "html",
+    escape = FALSE,
+    col.names = c("Species", "Trap Type", "Total", "Mean", "Median", "SD"),
+    align = c("l", "l", "r", "r", "r", "r"),
+    caption = "Table X. Summary Statistics for Mosquito Abundance by Species and Trap Type"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    font_size = 12
+  ) %>%
+  # Highlight "All Traps" rows
+  row_spec(
+    which(summary_table_formatted$Trap_Type == "All Traps"),
+    bold = TRUE,
+    background = "#f0f0f0"
+  ) %>%
+  # Highlight "All Species Combined" rows
+  row_spec(
+    which(summary_table_formatted$Species == "All Species Combined"),
+    bold = TRUE,
+    background = "#e6f3ff"
+  ) %>%
+  # Format species names in italics
+  column_spec(1, italic = TRUE, width = "12em") %>%
+  column_spec(2, width = "10em")
+
+# Display the table
+html_table
+
+# =============================================================================
+# Study-wide summary (console output)
+# =============================================================================
+
+cat("\n\nSTUDY-WIDE SUMMARY\n")
+cat("==================\n\n")
+
+study_wide <- summary_table_formatted %>%
+  filter(Trap_Type == "All Traps")
+
+print(study_wide, n = Inf)
+
+# Calculate percentages
+study_wide_pct <- study_wide %>%
+  filter(Species != "All Species Combined") %>%
+  mutate(
+    Percentage = round(100 * Total / sum(Total), 1)
+  )
+
+cat("\n\nSpecies Composition:\n")
+print(study_wide_pct %>% dplyr::select(Species, Total, Percentage), n = Inf)
+
+cat("\n\nOverall Summary:\n")
+cat("  Total observations:", nrow(HCM_Full_Aeae), "\n")
+cat("  Total mosquitoes:", sum(HCM_Full_Aeae_with_total$Total_All_Species), "\n")
+cat("  Mean per trap event:", round(mean(HCM_Full_Aeae_with_total$Total_All_Species), 2), "\n")
+
+```
+
+
+
+```{r Calculate Standard Deviations by Trap Type}
+
+# =============================================================================
+# CALCULATE STANDARD DEVIATIONS BY TRAP TYPE
+# =============================================================================
+
+library(dplyr)
+
+# Species configuration
+species_list <- c("Quinx", "Aeae", "Aealb", "Aem", "Cxn", "Psc")
+species_names <- c(
+  "Culex quinquefasciatus",
+  "Aedes aegypti", 
+  "Aedes albopictus",
+  "Aedes mediovittatus",
+  "Culex nigripalpus",
+  "Psorophora columbiae"
+)
+
+# Create total column
+HCM_Full_Aeae_with_total <- HCM_Full_Aeae %>%
+  mutate(Total_All_Species = Quinx + Aeae + Aealb + Aem + Cxn + Psc)
+
+cat("\n=======================================================================\n")
+cat("  STANDARD DEVIATIONS BY TRAP TYPE\n")
+cat("=======================================================================\n\n")
+
+# =============================================================================
+# Calculate SD for each species by trap type
+# =============================================================================
+
+sd_results <- list()
+
+for (i in seq_along(species_list)) {
+  species <- species_list[i]
+  species_name <- species_names[i]
+  
+  cat(species_name, ":\n")
+  
+  # By trap type
+  trap_sds <- HCM_Full_Aeae %>%
+    group_by(Trap_Type) %>%
+    summarise(
+      SD = sd(!!sym(species), na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  # Print for this species
+  for (j in 1:nrow(trap_sds)) {
+    cat("  ", trap_sds$Trap_Type[j], ": ", 
+        round(trap_sds$SD[j], 2), "\n", sep = "")
+  }
+  
+  # Overall SD
+  overall_sd <- sd(HCM_Full_Aeae[[species]], na.rm = TRUE)
+  cat("  All Traps: ", round(overall_sd, 2), "\n\n", sep = "")
+  
+  # Store results
+  trap_sds$Species <- species_name
+  trap_sds_all <- trap_sds %>%
+    add_row(Trap_Type = "All Traps", SD = overall_sd, Species = species_name)
+  
+  sd_results[[species]] <- trap_sds_all
+}
+
+# =============================================================================
+# Calculate SD for Total Mosquitoes by trap type
+# =============================================================================
+
+cat("All Species Combined (Total Mosquitoes):\n")
+
+total_sds <- HCM_Full_Aeae_with_total %>%
+  group_by(Trap_Type) %>%
+  summarise(
+    SD = sd(Total_All_Species, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+for (j in 1:nrow(total_sds)) {
+  cat("  ", total_sds$Trap_Type[j], ": ", 
+      round(total_sds$SD[j], 2), "\n", sep = "")
+}
+
+overall_total_sd <- sd(HCM_Full_Aeae_with_total$Total_All_Species, na.rm = TRUE)
+cat("  All Traps: ", round(overall_total_sd, 2), "\n\n", sep = "")
+
+total_sds$Species <- "All Species Combined"
+total_sds_all <- total_sds %>%
+  add_row(Trap_Type = "All Traps", SD = overall_total_sd, 
+          Species = "All Species Combined")
+
+sd_results[["Total"]] <- total_sds_all
+
+# =============================================================================
+# Combine into single table
+# =============================================================================
+
+all_sds <- bind_rows(sd_results) %>%
+  dplyr::select(Species, Trap_Type, SD) %>%
+  mutate(SD = round(SD, 2))
+
+# Reorder
+all_sds <- all_sds %>%
+  arrange(
+    factor(Species, levels = c(species_names, "All Species Combined")),
+    factor(Trap_Type, levels = c("BG- Sentinel", "CDC Gravid", "CDC LT", "All Traps"))
+  )
+
+cat("=======================================================================\n")
+cat("  COMPLETE STANDARD DEVIATION TABLE\n")
+cat("=======================================================================\n\n")
+
+print(all_sds, n = Inf)
+
+# =============================================================================
+# Create formatted table matching your layout
+# =============================================================================
+
+cat("\n\n=======================================================================\n")
+cat("  FORMATTED TABLE (MATCHING YOUR LAYOUT)\n")
+cat("=======================================================================\n\n")
+
+# Pivot to wide format for easier viewing
+sd_wide <- all_sds %>%
+  pivot_wider(names_from = Trap_Type, values_from = SD)
+
+print(sd_wide, n = Inf)
+
+# =============================================================================
+# Create CSV output
+# =============================================================================
+
+csv_file <- "/mnt/user-data/outputs/standard_deviations_by_trap.csv"
+write.csv(all_sds, csv_file, row.names = FALSE)
+cat("\n\nCSV saved to:", csv_file, "\n")
+
+# Also save wide format
+csv_file_wide <- "/mnt/user-data/outputs/standard_deviations_wide.csv"
+write.csv(sd_wide, csv_file_wide, row.names = FALSE)
+cat("Wide format CSV saved to:", csv_file_wide, "\n")
+
+# =============================================================================
+# Summary statistics about the standard deviations
+# =============================================================================
+
+cat("\n\n=======================================================================\n")
+cat("  STANDARD DEVIATION SUMMARY\n")
+cat("=======================================================================\n\n")
+
+cat("Range of SDs across all species and trap types:\n")
+cat("  Minimum:", round(min(all_sds$SD, na.rm = TRUE), 2), "\n")
+cat("  Maximum:", round(max(all_sds$SD, na.rm = TRUE), 2), "\n")
+cat("  Mean:", round(mean(all_sds$SD, na.rm = TRUE), 2), "\n")
+cat("  Median:", round(median(all_sds$SD, na.rm = TRUE), 2), "\n\n")
+
+# Which species/trap combinations have highest variability?
+cat("Top 5 highest standard deviations:\n")
+top_sds <- all_sds %>%
+  arrange(desc(SD)) %>%
+  head(5)
+print(top_sds, row.names = FALSE)
+
+```
+
+
+
+
+
+# Old and alternative code; likely requires significant reconfiguring for
+# directories and object names
 
 ```{r Code for hurdle models}
 
