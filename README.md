@@ -1,4 +1,3 @@
-```markdown
 # Haiti Mosquito Abundance Study
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -45,20 +44,26 @@ This repository contains all data, code, predictions, and figures associated wit
 
 ## Repository Structure
 
-```
-Haiti_MosqAbundanceStudy/
-├── Data_and_Code/          # Raw data and analysis code
-├── Figures/                # Manuscript figures
-├── Predictions/            # Model predictions and visualizations
-│   ├── Baseline/          # Annual average predictions
-│   ├── Monthly/           # Month-specific predictions
-│   ├── Interactive_Maps/  # HTML interactive maps
-│   ├── PDPlots/          # Partial dependence plots
-│   ├── StudySite/        # Study area visualizations
-│   └── Summary_Statistics/ # Spatial statistics
-├── index.html             # Repository website
-└── README.md             # This file
-```
+- **Data_and_Code/** - Raw data and analysis code
+  - Species-specific mosquito count datasets (6 CSV files)
+  - Environmental raster stacks (monthly and annual)
+  - R Markdown analysis code
+  - Haiti shapefiles
+
+- **Figures/** - Manuscript figures and supplemental materials
+  - Main figures (Figure1.tif, Figure2.tif, Figure3.tif)
+  - Supplemental materials (S1.pdf, S2.pdf, S3.csv, S4.pdf)
+
+- **Predictions/** - Model predictions and visualizations
+  - **Baseline/** - Annual average predictions (by species)
+  - **Monthly/** - Month-specific predictions (by species)
+  - **Interactive_Maps/** - HTML interactive maps for web viewing
+  - **PDPlots/** - Partial dependence plots showing covariate effects
+  - **StudySite/** - Study area visualizations
+  - **Summary_Statistics/** - Spatial statistics and summaries
+
+- **index.html** - Repository website homepage
+- **README.md** - This documentation file
 
 ## Data Files
 
@@ -79,10 +84,10 @@ Each dataset includes:
 - `Latitude`/`Longitude`: Trap coordinates (WGS84)
 - `Count`: Number of mosquitoes captured
 - Environmental covariates extracted at species-specific buffer radii:
-  - Temperature (°C)
+  - Temperature (??C)
   - Precipitation (mm)
   - NDVI (Normalized Difference Vegetation Index)
-  - Population density (persons/km²)
+  - Population density (persons/km??)
   - Elevation (m)
   - Built area (%)
   - Cropland cover (%)
@@ -98,7 +103,7 @@ Contains 13 multi-band GeoTIFF files:
 
 **Raster Specifications:**
 - Coordinate system: WGS84 / UTM Zone 18N
-- Resolution: 250m × 250m
+- Resolution: 250m ?? 250m
 - Extent: Haiti national boundaries
 - Bands: All environmental covariates listed above
 
@@ -233,48 +238,46 @@ git clone https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy.git
 cd Haiti_MosqAbundanceStudy
 ```
 
+### Reproducing the Analysis
+
+1. Open `Data_and_Code/Haiti_MosqAbundance.Rmd` in RStudio
+2. Install required packages (listed in the Rmd header)
+3. Knit the document to reproduce all analyses and figures
+4. Model code and other features can be adjusted as desired.
+
 ## Citation
 
 If you use this data or code in your research, please cite:
 
-```
 [Author names]. (Year). [Manuscript title]. [Journal name]. DOI: [pending]
-```
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-**Data Usage:** All data are freely available for use with proper attribution. We encourage researchers to use these data for:
-- Model validation and comparison
-- Meta-analyses
-- Vector control planning
-- Educational purposes
+**Data Usage:** All data are freely available for use with proper attribution.
 
 ## Contact
 
 Ian Pshea-Smith  
+University of Florida  
 Email: [ismithgh@umich.edu](mailto:ismithgh@umich.edu)
 
 **Issues and Questions:**  
 Please use the [GitHub Issues](https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/issues) page for:
 - Data questions
 - Code issues
-- Feature requests
-- General inquiries
 
 ## Acknowledgments
 
-### Funding
+###Funding
 - This work was funded by the Armed Forces Health Surveillance Branch (AFHSB), Global Emerging Infections Surveillance (GEIS) Section, under ProMIS ID (P0154_24_EC and P0118-24-RD). The funders had no role in study design, data collection and analysis, decision to publish, or preparation of the manuscript.
-
-### Disclaimer
- - The use of either trade or manufacturers’ names in this report does not constitute an official endorsement of any commercial products. This report may not be cited for purposes of advertisement. The opinions, interpretations, conclusions, recommendations and views in this publication are those of the authors and do not necessarily reflect the official policy or position of the Uniformed Services University of the Health Sciences, Department of the Army, Department of the Navy, Department of Defense, nor the U. S. Government. Multiple authors are military service members of the U.S. Government. This work was prepared as part of their official duties. Title 17, U.S.C., §105 provides that copyright protection under this title is not available for any work of the U.S. Government. Title 17, U.S.C., §101 defines a U.S. Government work as a work prepared by a military Service member or employee of the U.S. Government as part of that person’s official duties.
+###Disclaimer
+- The use of either trade or manufacturers??? names in this report does not constitute an official endorsement of any commercial products. This report may not be cited for purposes of advertisement. The opinions, interpretations, conclusions, recommendations and views in this publication are those of the authors and do not necessarily reflect the official policy or position of the Uniformed Services University of the Health Sciences, Department of the Army, Department of the Navy, Department of Defense, nor the U. S. Government. Multiple authors are military service members of the U.S. Government. This work was prepared as part of their official duties. Title 17, U.S.C., ??105 provides that copyright protection under this title is not available for any work of the U.S. Government. Title 17, U.S.C., ??101 defines a U.S. Government work as a work prepared by a military Service member or employee of the U.S. Government as part of that person???s official duties.
 
 
 ---
 
 **Last Updated:** December 2025  
 **Repository Status:** Active Development  
-**Manuscript Status:** In Preparation
-```
+**Manuscript Status:** Accepted, under revisions
