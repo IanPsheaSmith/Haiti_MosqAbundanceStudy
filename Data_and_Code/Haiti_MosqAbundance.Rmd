@@ -46,7 +46,7 @@ output: html_document
     # already extracted from Bioclim & WorldPop.
 
   # Define GitHub base URL for raw files
-    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/"
+    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Data_and_Code/"
 
   # Define dataset names
     datasets <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq", 
@@ -72,7 +72,7 @@ output: html_document
     head(HCM_Full_Aeae)
 
   # Download Shapefiles for the map(s)
-    zip_url <- "https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Haiti_Shapefiles.zip"
+    zip_url <- "https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/raw/main/Data_and_Code/Haiti_Shapefiles.zip"
     zip_dest <- tempfile(fileext = ".zip")
     unzip_dir <- tempfile()
     download.file(zip_url, destfile = zip_dest, mode = "wb")
@@ -86,7 +86,7 @@ output: html_document
     Haiti_adm3 <- st_read(adm3_path)
     
   # Base URL for raw GitHub files
-    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Rasters/"
+    base_url <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Data_and_Code/Rasters/"
   
   # Set Layer Names
     layer_names <- c("Precip", "TMean", "WindMean", "Elevation", "LC_trees", 
@@ -304,30 +304,6 @@ output: html_document
   # Combine histograms side-by-side
   combined_plot <- grid.arrange(grobs = histograms, ncol = 3)
   
-  # Save the combined plot as a PNG with a transparent background
-  ggsave(
-    filename = file.path(output_path, "combined_histograms.png"),
-    plot = combined_plot,
-    device = "png",
-    bg = "transparent",
-    width = 24,  # Adjust width as needed
-    height = 8,  # Adjust height as needed
-    units = "in"
-  )
-  
-  # Save individual histograms as PNGs with transparent backgrounds
-  for (i in seq_along(histograms)) {
-    ggsave(
-      filename = file.path(output_path, paste0(variables[i], "_histogram.png")),
-      plot = histograms[[i]],
-      device = "png",
-      bg = "transparent",
-      width = 8,  # Adjust width as needed
-      height = 8,  # Adjust height as needed
-      units = "in"
-    )
-  }
-  
     # Summary statistics calculation
     summary_table <- HCM_Full_Aeae_renamed %>%
       group_by(Trap_Type) %>%
@@ -488,55 +464,6 @@ output: html_document
 
 
 
-```{r VIF Test}
-
-  GLM_Full <- glm(Aeae ~ Precip + TMean + nightlight + Elevation + trees + shrubs + grassland + cropland + built + water + wetland + NDVI + WindMean, data = HCM_Full_Aeae)
-  GLM_FullVIF <- car::vif(GLM_Full)
-  print(GLM_FullVIF)
-  max(GLM_FullVIF)
-
-  # Remove Built (VIF > 50K)
-  GLM_Step2 <- glm(Aeae ~ Precip + TMean + nightlight + Elevation + trees + shrubs + grassland + cropland + water + wetland + NDVI + WindMean, data = HCM_Full_Aeae)
-  GLM_Step2VIF <- car::vif(GLM_Step2)
-  print(GLM_Step2VIF)
-  max(GLM_Step2VIF)
-  
-  # Remove Grassland (VIF > 50)
-  GLM_Step3 <- glm(Aeae ~ Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + water + wetland + NDVI + WindMean, data = HCM_Full_Aeae)
-  GLM_Step3VIF <- car::vif(GLM_Step3)
-  print(GLM_Step3VIF)
-  max(GLM_Step3VIF)
-  
-  # Remove Water (VIF > 30)
-  GLM_Step4 <- glm(Aeae ~ Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + wetland + NDVI + WindMean, data = HCM_Full_Aeae)
-  GLM_Step4VIF <- car::vif(GLM_Step4)
-  print(GLM_Step4VIF)
-  max(GLM_Step4VIF)
-
-  # Remove NDVI (VIF > 10)    
-    GLM_Step5 <- glm(Aeae ~ Precip + TMean + nightlight + Elevation + trees + cropland + wetland + WindMean, data = HCM_Full_Aealb)
-  GLM_Step5VIF <- car::vif(GLM_Step5)
-  print(GLM_Step5VIF)
-  max(GLM_Step5VIF)
-  
-    AeaeHurd <- pscl::hurdle(
-      Aeae ~ Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + wetland | Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + wetland, 
-      data = HCM_Full_Aeae, 
-      dist = "negbin"
-    )
-    
-    AealbHurd <- pscl::hurdle(
-      Aealb ~ Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + wetland | Precip + TMean + nightlight + Elevation + trees + shrubs + cropland + wetland, 
-      data = HCM_Full_Aealb, 
-      dist = "negbin"
-    )
-    
-    summary(AeaeHurd)
-    summary(AealbHurd)
-```
-
-
-
 ```{r Code for boosted regression trees}
 # =============================================================================
 # BOOTSTRAP BRT MODELING FOR ROBUST UNCERTAINTY ESTIMATION
@@ -551,33 +478,21 @@ library(purrr)
 library(dplyr)
 library(dismo)
 library(gbm)
-library(parallel)
-
-cat("\n=======================================================================\n")
-cat("  BOOTSTRAP BRT MODELING SYSTEM (100 REPLICATES)\n")
-cat("  For Robust Uncertainty Estimation\n")
-cat("=======================================================================\n\n")
 
 # ---------------------------
 # Configuration
 # ---------------------------
 
 base_covariates <- c("Precip", "TMean", "WindMean", "Elevation")
-all_lc_variables <- c("LC_trees", "LC_shrubs", "LC_grassland", "LC_cropland", 
-                      "LC_wetland", "LC_built")
+all_lc_variables <- c("LC_shrubs", "LC_cropland", "LC_wetland", "LC_built")
 
 n_bootstrap <- 100
-use_parallel <- TRUE
-n_cores <- max(1, floor(parallel::detectCores() * 2/3))
 
 species_list <- c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc")
 dataset_names <- c("HCM_Full_Aeae", "HCM_Full_Aealb", "HCM_Full_Cxq",
                    "HCM_Full_Aem", "HCM_Full_Cxn", "HCM_Full_Psc")
 
-cat("Bootstrap settings:\n")
-cat("  Iterations:", n_bootstrap, "\n")
-cat("  Parallel processing:", use_parallel, "\n")
-cat("  Cores:", n_cores, "(2/3 of", parallel::detectCores(), "available)\n\n")
+cat("\nBootstrap BRT System:", n_bootstrap, "replicates per species\n\n")
 
 # ---------------------------
 # Helper Functions
@@ -720,9 +635,7 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
                                    n_boot = n_bootstrap,
                                    family = "bernoulli") {
   
-  cat("\n=======================================================================\n")
-  cat("  BOOTSTRAP ENSEMBLE:", species, "(", family, ")\n")
-  cat("=======================================================================\n\n")
+  cat("\nFitting", species, "-", family, "model...\n")
   
   dataset <- get(dataset_name, envir = .GlobalEnv)
   covariates <- get_covariates_for_dataset(dataset_name)
@@ -733,42 +646,17 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
     n_present <- sum(dataset[[species]] >= 1)
   }
   
-  cat("Sample size:", n_present, "presences\n")
-  cat("Covariates:", paste(covariates, collapse = ", "), "\n")
-  
   if (n_present < 20) {
-    cat("SKIPPED: Insufficient data\n")
+    cat("  Skipped: Insufficient data\n")
     return(NULL)
   }
   
-  cat("Fitting", n_boot, "bootstrap models...\n")
-  
   start_time <- Sys.time()
   
-  if (use_parallel && n_cores > 1) {
-    cl <- parallel::makeCluster(n_cores)
-    
-    parallel::clusterExport(cl, c("fit_single_bootstrap_brt", "get_tree_complexity",
-                                  "species", "dataset", "covariates", "family"),
-                            envir = environment())
-    parallel::clusterEvalQ(cl, {
-      library(dismo)
-      library(gbm)
-      library(dplyr)
-      library(pROC)
-    })
-    
-    bootstrap_results <- parallel::parLapply(cl, 1:n_boot, function(i) {
-      fit_single_bootstrap_brt(species, dataset, covariates, i, family)
-    })
-    
-    parallel::stopCluster(cl)
-  } else {
-    bootstrap_results <- lapply(1:n_boot, function(i) {
-      if (i %% 25 == 0) cat("  Iteration", i, "/", n_boot, "\n")
-      fit_single_bootstrap_brt(species, dataset, covariates, i, family)
-    })
-  }
+  bootstrap_results <- lapply(1:n_boot, function(i) {
+    if (i %% 25 == 0) cat("  Progress:", i, "/", n_boot, "\n")
+    fit_single_bootstrap_brt(species, dataset, covariates, i, family)
+  })
   
   successful <- !sapply(bootstrap_results, is.null)
   bootstrap_results <- bootstrap_results[successful]
@@ -776,13 +664,10 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
   
   elapsed <- difftime(Sys.time(), start_time, units = "secs")
   
-  cat("\nBootstrap complete:\n")
-  cat("  Successful models:", n_successful, "/", n_boot, "\n")
-  cat("  Time:", round(elapsed, 1), "seconds\n")
-  cat("  Average per model:", round(elapsed / n_boot, 2), "seconds\n")
+  cat("  Complete:", n_successful, "/", n_boot, "models in", round(elapsed, 1), "seconds\n")
   
   if (n_successful < n_boot * 0.5) {
-    cat("  WARNING: Low success rate (<50%)\n")
+    cat("  WARNING: Low success rate\n")
   }
   
   # Extract models
@@ -840,12 +725,12 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
       )
     }
     
-    cat("\nOOB Performance Metrics (Mean ± SD [95% CI]):\n")
-    apply(aggregated_metrics, 1, function(row) {
-      cat(sprintf("  %s: %.3f ± %.3f [%.3f, %.3f]\n",
-                  row["metric"], as.numeric(row["mean"]), as.numeric(row["sd"]),
+    cat("  OOB Metrics:\n")
+    invisible(apply(aggregated_metrics, 1, function(row) {
+      cat(sprintf("    %s: %.3f [%.3f-%.3f]\n",
+                  row["metric"], as.numeric(row["mean"]),
                   as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
-    })
+    }))
   }
   
   # Consensus variable importance with CI
@@ -868,13 +753,6 @@ fit_bootstrap_ensemble <- function(species, dataset_name,
   consensus_imp$cv <- consensus_imp$sd / consensus_imp$mean
   
   consensus_imp <- consensus_imp[order(-consensus_imp$mean), ]
-  
-  cat("\nConsensus Variable Importance (Mean ± SD [95% CI]):\n")
-  apply(consensus_imp, 1, function(row) {
-    cat(sprintf("  %s: %.2f%% ± %.2f%% [%.2f%%, %.2f%%]\n",
-                row["var"], as.numeric(row["mean"]), as.numeric(row["sd"]),
-                as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
-  })
   
   result <- list(
     species = species,
@@ -908,23 +786,9 @@ predict_bootstrap_ensemble <- function(bootstrap_ensemble, newdata,
   models <- bootstrap_ensemble$models
   n_models <- length(models)
   
-  # Parallel prediction if large dataset
-  if (nrow(newdata) > 10000 && use_parallel && n_cores > 1) {
-    cl <- parallel::makeCluster(n_cores)
-    parallel::clusterExport(cl, c("models", "newdata", "type"), envir = environment())
-    parallel::clusterEvalQ(cl, library(gbm))
-    
-    predictions_list <- parallel::parLapply(cl, models, function(m) {
-      predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
-    })
-    
-    parallel::stopCluster(cl)
-    predictions_matrix <- do.call(cbind, predictions_list)
-  } else {
-    predictions_matrix <- sapply(models, function(m) {
-      predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
-    })
-  }
+  predictions_matrix <- sapply(models, function(m) {
+    predict(m, newdata, n.trees = m$gbm.call$best.trees, type = type)
+  })
   
   pred_mean <- rowMeans(predictions_matrix, na.rm = TRUE)
   pred_sd <- apply(predictions_matrix, 1, sd, na.rm = TRUE)
@@ -955,166 +819,27 @@ predict_bootstrap_ensemble <- function(bootstrap_ensemble, newdata,
 # FIT ALL BOOTSTRAP ENSEMBLES
 # =============================================================================
 
-cat("\n=======================================================================\n")
-cat("  FITTING BOOTSTRAP ENSEMBLES FOR ALL SPECIES\n")
-cat("=======================================================================\n\n")
+# =============================================================================
+# FIT ALL BOOTSTRAP ENSEMBLES
+# =============================================================================
+
+cat("\nFITTING BINARY MODELS\n")
 
 set.seed(1999)
-
-cat("STEP 1: BINARY (PRESENCE/ABSENCE) MODELS\n")
-cat("-----------------------------------------------------------------------\n")
 
 BRT_Bootstrap_Binary <- purrr::map2(species_list, dataset_names, 
                                     ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "bernoulli")) %>%
   purrr::set_names(species_list)
 
-cat("\n\nSTEP 2: COUNT (ABUNDANCE) MODELS\n")
-cat("-----------------------------------------------------------------------\n")
+cat("\n\nFITTING COUNT MODELS\n")
 
-BRT_Bootstrap_Count <- purrr::map2(species_list, dataset_names,
-                                   ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "poisson")) %>%
+set.seed(1999)
+
+BRT_Bootstrap_Counts <- purrr::map2(species_list, dataset_names, 
+                                    ~fit_bootstrap_ensemble(.x, .y, n_bootstrap, "poisson")) %>%
   purrr::set_names(species_list)
 
-# =============================================================================
-# COMPREHENSIVE SUMMARY WITH CI
-# =============================================================================
-
-cat("\n=======================================================================\n")
-cat("  BOOTSTRAP ENSEMBLE SUMMARY (100 REPLICATES)\n")
-cat("=======================================================================\n\n")
-
-# Model fitting summary
-summary_table <- data.frame(
-  Species = species_list,
-  Binary_Success = sapply(BRT_Bootstrap_Binary, function(x) {
-    if (is.null(x)) "FAILED" else paste0(x$n_successful, "/", x$n_bootstrap)
-  }),
-  Count_Success = sapply(BRT_Bootstrap_Count, function(x) {
-    if (is.null(x)) "FAILED" else paste0(x$n_successful, "/", x$n_bootstrap)
-  })
-)
-
-cat("MODEL FITTING SUCCESS:\n")
-print(summary_table, row.names = FALSE)
-
-# Binary model performance with CI
-cat("\n\nBINARY MODEL PERFORMANCE (OOB Metrics with 95% CI):\n")
-cat("-----------------------------------------------------------------------\n")
-
-binary_perf_table <- purrr::map_dfr(names(BRT_Bootstrap_Binary), function(sp) {
-  ens <- BRT_Bootstrap_Binary[[sp]]
-  if (is.null(ens) || is.null(ens$aggregated_metrics)) {
-    return(data.frame(
-      Species = sp,
-      AUC = NA, AUC_CI = NA,
-      Sensitivity = NA, Sens_CI = NA,
-      Specificity = NA, Spec_CI = NA,
-      stringsAsFactors = FALSE
-    ))
-  }
-  
-  metrics <- ens$aggregated_metrics
-  
-  get_metric <- function(name) {
-    row <- metrics[metrics$metric == name, ]
-    if (nrow(row) == 0) return(list(mean = NA, ci = NA))
-    list(
-      mean = round(row$mean, 3),
-      ci = paste0("[", round(row$lower_ci, 3), ", ", round(row$upper_ci, 3), "]")
-    )
-  }
-  
-  auc <- get_metric("AUC")
-  sens <- get_metric("Sensitivity")
-  spec <- get_metric("Specificity")
-  
-  data.frame(
-    Species = sp,
-    AUC = auc$mean, AUC_CI = auc$ci,
-    Sensitivity = sens$mean, Sens_CI = sens$ci,
-    Specificity = spec$mean, Spec_CI = spec$ci,
-    stringsAsFactors = FALSE
-  )
-})
-
-print(binary_perf_table, row.names = FALSE)
-
-# Count model performance with CI
-cat("\n\nCOUNT MODEL PERFORMANCE (OOB Metrics with 95% CI):\n")
-cat("-----------------------------------------------------------------------\n")
-
-count_perf_table <- purrr::map_dfr(names(BRT_Bootstrap_Count), function(sp) {
-  ens <- BRT_Bootstrap_Count[[sp]]
-  if (is.null(ens) || is.null(ens$aggregated_metrics)) {
-    return(data.frame(
-      Species = sp,
-      Correlation = NA, Cor_CI = NA,
-      RMSE = NA, RMSE_CI = NA,
-      MAE = NA, MAE_CI = NA,
-      stringsAsFactors = FALSE
-    ))
-  }
-  
-  metrics <- ens$aggregated_metrics
-  
-  get_metric <- function(name, digits = 3) {
-    row <- metrics[metrics$metric == name, ]
-    if (nrow(row) == 0) return(list(mean = NA, ci = NA))
-    list(
-      mean = round(row$mean, digits),
-      ci = paste0("[", round(row$lower_ci, digits), ", ", round(row$upper_ci, digits), "]")
-    )
-  }
-  
-  cor_m <- get_metric("Correlation")
-  rmse_m <- get_metric("RMSE", 2)
-  mae_m <- get_metric("MAE", 2)
-  
-  data.frame(
-    Species = sp,
-    Correlation = cor_m$mean, Cor_CI = cor_m$ci,
-    RMSE = rmse_m$mean, RMSE_CI = rmse_m$ci,
-    MAE = mae_m$mean, MAE_CI = mae_m$ci,
-    stringsAsFactors = FALSE
-  )
-})
-
-print(count_perf_table, row.names = FALSE)
-
-# Variable importance summary
-cat("\n\nVARIABLE IMPORTANCE SUMMARY (Mean ± SD across 100 bootstraps):\n")
-cat("-----------------------------------------------------------------------\n")
-
-purrr::walk(names(BRT_Bootstrap_Binary), function(sp) {
-  ens <- BRT_Bootstrap_Binary[[sp]]
-  if (is.null(ens)) return()
-  
-  cat("\n", sp, " (Binary Model):\n", sep = "")
-  imp <- ens$consensus_importance
-  
-  apply(imp[1:min(5, nrow(imp)), ], 1, function(row) {
-    cat(sprintf("  %s: %.1f%% ± %.1f%% [%.1f%%, %.1f%%]\n",
-                row["var"], as.numeric(row["mean"]), as.numeric(row["sd"]),
-                as.numeric(row["lower_ci"]), as.numeric(row["upper_ci"])))
-  })
-})
-
-cat("\n=======================================================================\n")
-cat("  BOOTSTRAP MODELING COMPLETE\n")
-cat("=======================================================================\n\n")
-
-cat("Objects created:\n")
-cat("  - BRT_Bootstrap_Binary: List of", length(BRT_Bootstrap_Binary), "bootstrap ensembles\n")
-cat("  - BRT_Bootstrap_Count: List of", length(BRT_Bootstrap_Count), "bootstrap ensembles\n\n")
-
-cat("Each ensemble contains:\n")
-cat("  - models: List of", n_bootstrap, "bootstrap BRT models\n")
-cat("  - consensus_importance: Variable importance with 95% CI\n")
-cat("  - aggregated_metrics: OOB performance metrics with 95% CI\n")
-cat("  - oob_metrics_raw: Raw metrics from each bootstrap iteration\n\n")
-
-cat("Use predict_bootstrap_ensemble() for predictions with uncertainty.\n")
-cat("Returns: mean, SD, 95% CI, CV, and model agreement for each prediction.\n\n")
+cat("\n\nAll bootstrap ensembles complete\n")
 
 ```
 
@@ -1122,12 +847,9 @@ cat("Returns: mean, SD, 95% CI, CV, and model agreement for each prediction.\n\n
 
 ```{r Code for BRT Predictions}
 # =============================================================================
-# BOOTSTRAP BRT ENSEMBLE PREDICTIONS - OPTIMIZED (SEQUENTIAL)
 # =============================================================================
-# Key finding: Parallel overhead >> prediction time for gbm models
-# Sequential prediction: ~35 seconds for 100 models
-# matrixStats for row operations: ~10 seconds
-# Total per prediction: ~1-2 minutes (vs 50+ minutes with parallelization)
+# BOOTSTRAP BRT ENSEMBLE PREDICTIONS
+# =============================================================================
 # =============================================================================
 
 library(raster)
@@ -1139,7 +861,6 @@ library(purrr)
 
 cat("\n=======================================================================\n")
 cat("  BOOTSTRAP ENSEMBLE PREDICTIONS - SEQUENTIAL OPTIMIZED\n")
-cat("  ~2 min per prediction (vs 50+ min with parallel overhead)\n")
 cat("=======================================================================\n\n")
 
 # =============================================================================
@@ -1551,7 +1272,7 @@ predict_all_species <- function(binary_ensembles,
 # Run all predictions
 results <- predict_all_species(
   binary_ensembles = BRT_Bootstrap_Binary,
-  count_ensembles = BRT_Bootstrap_Count,
+  count_ensembles = BRT_Bootstrap_Counts,
   species_list = c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc"),
   average_stack = AverageStack,
   monthly_stacks = MonthlyStacks,
@@ -1584,7 +1305,7 @@ library(dplyr)
 # CONFIGURATION
 # =============================================================================
 
-prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
+prediction_base <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Predictions/"
 output_dir <- file.path(prediction_base, "Interactive_Maps")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -2167,10 +1888,6 @@ cat("\n=== All figures generated ===\n")
 # =============================================================================
 # AVERAGED PARTIAL DEPENDENCY PLOTS FROM BOOTSTRAP BRT ENSEMBLES
 # =============================================================================
-# Creates consensus partial dependency plots averaged across 100 bootstrap models
-# Separate plots for each species, model type (presence/abundance), and variable
-# Uses plasma color scheme with different colors per variable
-# =============================================================================
 
 library(dismo)
 library(gbm)
@@ -2179,12 +1896,9 @@ library(viridis)
 library(dplyr)
 library(purrr)
 
-cat("\n=======================================================================\n")
-cat("  PARTIAL DEPENDENCY PLOT GENERATION\n")
-cat("=======================================================================\n\n")
-
 # Configuration
-output_dir <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Figures/PDPlots"
+
+output_dir <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Predictions/PDPlots"
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Variable mapping (requested names -> actual covariate names)
@@ -2492,10 +2206,6 @@ create_combined_pdp_plot <- function(species_code, model_type,
 # BATCH PROCESSING: All species and model types
 # =============================================================================
 
-cat("=======================================================================\n")
-cat("PROCESSING ALL SPECIES AND MODEL TYPES\n")
-cat("=======================================================================\n")
-
 species_list <- c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc")
 
 total_start <- Sys.time()
@@ -2579,11 +2289,6 @@ for (species_code in species_list) {
 
 total_elapsed <- difftime(Sys.time(), total_start, units = "mins")
 
-cat("\n=======================================================================\n")
-cat("PARTIAL DEPENDENCY PLOT GENERATION COMPLETE\n")
-cat("=======================================================================\n\n")
-
-
 
 ```
 
@@ -2600,7 +2305,7 @@ library(dplyr)
 library(tidyr)
 
 # Configuration
-prediction_base <- "C:/Users/ianpsheasmith/Documents/GitHub/Haiti_IR/Haiti_MosqAbundanceStudy/Predictions"
+prediction_base <- "https://raw.githubusercontent.com/IanPsheaSmith/Haiti_MosqAbundanceStudy/main/Predictions"
 
 species_info <- data.frame(
   species_code = c("Aeae", "Aealb", "Quinx", "Aem", "Cxn", "Psc"),
@@ -2783,365 +2488,6 @@ print(stats_table %>%
       row.names = FALSE)
 
 ```
-
-
-
-```{r Comprehensive Summary Table for All Species}
-
-# =============================================================================
-# COMPREHENSIVE SUMMARY STATISTICS TABLE
-# All Six Species by Trap Type and Overall Study Period
-# =============================================================================
-
-library(dplyr)
-library(tidyr)
-library(kableExtra)
-
-# Species configuration
-species_list <- c("Quinx", "Aeae", "Aealb", "Aem", "Cxn", "Psc")
-species_names <- c(
-  "Culex quinquefasciatus",
-  "Aedes aegypti", 
-  "Aedes albopictus",
-  "Aedes mediovittatus",
-  "Culex nigripalpus",
-  "Psorophora columbiae"
-)
-
-# =============================================================================
-# Calculate summary statistics for each species
-# =============================================================================
-
-calculate_species_summary <- function(species_col, trap_type_col = "Trap_Type") {
-  
-  # By trap type
-  by_trap <- HCM_Full_Aeae %>%
-    group_by(Trap_Type = !!sym(trap_type_col)) %>%
-    summarise(
-      Total = sum(!!sym(species_col), na.rm = TRUE),
-      Mean = mean(!!sym(species_col), na.rm = TRUE),
-      Median = median(!!sym(species_col), na.rm = TRUE),
-      SD = sd(!!sym(species_col), na.rm = TRUE),
-      .groups = "drop"
-    )
-  
-  # Overall (all trap types combined)
-  overall <- HCM_Full_Aeae %>%
-    summarise(
-      Trap_Type = "All Traps",
-      Total = sum(!!sym(species_col), na.rm = TRUE),
-      Mean = mean(!!sym(species_col), na.rm = TRUE),
-      Median = median(!!sym(species_col), na.rm = TRUE),
-      SD = sd(!!sym(species_col), na.rm = TRUE)
-    )
-  
-  # Combine
-  bind_rows(by_trap, overall)
-}
-
-# Generate summary for each species
-summary_list <- list()
-
-for (i in seq_along(species_list)) {
-  species <- species_list[i]
-  species_name <- species_names[i]
-  
-  summary_stats <- calculate_species_summary(species)
-  summary_stats$Species <- species_name
-  
-  summary_list[[species]] <- summary_stats
-}
-
-# Combine all species
-all_species_summary <- bind_rows(summary_list) %>%
-  dplyr::select(Species, Trap_Type, Total, Mean, Median, SD)
-
-# =============================================================================
-# Calculate combined totals across all species
-# =============================================================================
-
-# Create total counts column
-HCM_Full_Aeae_with_total <- HCM_Full_Aeae %>%
-  mutate(Total_All_Species = Quinx + Aeae + Aealb + Aem + Cxn + Psc)
-
-# By trap type
-combined_by_trap <- HCM_Full_Aeae_with_total %>%
-  group_by(Trap_Type) %>%
-  summarise(
-    Total = sum(Total_All_Species, na.rm = TRUE),
-    Mean = mean(Total_All_Species, na.rm = TRUE),
-    Median = median(Total_All_Species, na.rm = TRUE),
-    SD = sd(Total_All_Species, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# Overall
-combined_overall <- HCM_Full_Aeae_with_total %>%
-  summarise(
-    Trap_Type = "All Traps",
-    Total = sum(Total_All_Species, na.rm = TRUE),
-    Mean = mean(Total_All_Species, na.rm = TRUE),
-    Median = median(Total_All_Species, na.rm = TRUE),
-    SD = sd(Total_All_Species, na.rm = TRUE)
-  )
-
-combined_summary <- bind_rows(combined_by_trap, combined_overall) %>%
-  mutate(Species = "All Species Combined") %>%
-  dplyr::select(Species, Trap_Type, Total, Mean, Median, SD)
-
-# Add to main summary
-all_species_summary <- bind_rows(all_species_summary, combined_summary)
-
-# =============================================================================
-# Format table
-# =============================================================================
-
-# Round numeric columns
-summary_table_formatted <- all_species_summary %>%
-  mutate(
-    Mean = round(Mean, 2),
-    Median = round(Median, 2),
-    SD = round(SD, 2)
-  )
-
-# Reorder to put "All Traps" at bottom of each species group
-summary_table_formatted <- summary_table_formatted %>%
-  arrange(
-    factor(Species, levels = c(species_names, "All Species Combined")),
-    factor(Trap_Type, levels = c("BG- Sentinel", "CDC Gravid", "CDC LT", "All Traps"))
-  )
-
-# =============================================================================
-# Create beautiful HTML table
-# =============================================================================
-
-html_table <- summary_table_formatted %>%
-  kable(
-    format = "html",
-    escape = FALSE,
-    col.names = c("Species", "Trap Type", "Total", "Mean", "Median", "SD"),
-    align = c("l", "l", "r", "r", "r", "r"),
-    caption = "Table X. Summary Statistics for Mosquito Abundance by Species and Trap Type"
-  ) %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
-    full_width = FALSE,
-    font_size = 12
-  ) %>%
-  # Highlight "All Traps" rows
-  row_spec(
-    which(summary_table_formatted$Trap_Type == "All Traps"),
-    bold = TRUE,
-    background = "#f0f0f0"
-  ) %>%
-  # Highlight "All Species Combined" rows
-  row_spec(
-    which(summary_table_formatted$Species == "All Species Combined"),
-    bold = TRUE,
-    background = "#e6f3ff"
-  ) %>%
-  # Format species names in italics
-  column_spec(1, italic = TRUE, width = "12em") %>%
-  column_spec(2, width = "10em")
-
-# Display the table
-html_table
-
-# =============================================================================
-# Study-wide summary (console output)
-# =============================================================================
-
-cat("\n\nSTUDY-WIDE SUMMARY\n")
-cat("==================\n\n")
-
-study_wide <- summary_table_formatted %>%
-  filter(Trap_Type == "All Traps")
-
-print(study_wide, n = Inf)
-
-# Calculate percentages
-study_wide_pct <- study_wide %>%
-  filter(Species != "All Species Combined") %>%
-  mutate(
-    Percentage = round(100 * Total / sum(Total), 1)
-  )
-
-cat("\n\nSpecies Composition:\n")
-print(study_wide_pct %>% dplyr::select(Species, Total, Percentage), n = Inf)
-
-cat("\n\nOverall Summary:\n")
-cat("  Total observations:", nrow(HCM_Full_Aeae), "\n")
-cat("  Total mosquitoes:", sum(HCM_Full_Aeae_with_total$Total_All_Species), "\n")
-cat("  Mean per trap event:", round(mean(HCM_Full_Aeae_with_total$Total_All_Species), 2), "\n")
-
-```
-
-
-
-```{r Calculate Standard Deviations by Trap Type}
-
-# =============================================================================
-# CALCULATE STANDARD DEVIATIONS BY TRAP TYPE
-# =============================================================================
-
-library(dplyr)
-
-# Species configuration
-species_list <- c("Quinx", "Aeae", "Aealb", "Aem", "Cxn", "Psc")
-species_names <- c(
-  "Culex quinquefasciatus",
-  "Aedes aegypti", 
-  "Aedes albopictus",
-  "Aedes mediovittatus",
-  "Culex nigripalpus",
-  "Psorophora columbiae"
-)
-
-# Create total column
-HCM_Full_Aeae_with_total <- HCM_Full_Aeae %>%
-  mutate(Total_All_Species = Quinx + Aeae + Aealb + Aem + Cxn + Psc)
-
-cat("\n=======================================================================\n")
-cat("  STANDARD DEVIATIONS BY TRAP TYPE\n")
-cat("=======================================================================\n\n")
-
-# =============================================================================
-# Calculate SD for each species by trap type
-# =============================================================================
-
-sd_results <- list()
-
-for (i in seq_along(species_list)) {
-  species <- species_list[i]
-  species_name <- species_names[i]
-  
-  cat(species_name, ":\n")
-  
-  # By trap type
-  trap_sds <- HCM_Full_Aeae %>%
-    group_by(Trap_Type) %>%
-    summarise(
-      SD = sd(!!sym(species), na.rm = TRUE),
-      .groups = "drop"
-    )
-  
-  # Print for this species
-  for (j in 1:nrow(trap_sds)) {
-    cat("  ", trap_sds$Trap_Type[j], ": ", 
-        round(trap_sds$SD[j], 2), "\n", sep = "")
-  }
-  
-  # Overall SD
-  overall_sd <- sd(HCM_Full_Aeae[[species]], na.rm = TRUE)
-  cat("  All Traps: ", round(overall_sd, 2), "\n\n", sep = "")
-  
-  # Store results
-  trap_sds$Species <- species_name
-  trap_sds_all <- trap_sds %>%
-    add_row(Trap_Type = "All Traps", SD = overall_sd, Species = species_name)
-  
-  sd_results[[species]] <- trap_sds_all
-}
-
-# =============================================================================
-# Calculate SD for Total Mosquitoes by trap type
-# =============================================================================
-
-cat("All Species Combined (Total Mosquitoes):\n")
-
-total_sds <- HCM_Full_Aeae_with_total %>%
-  group_by(Trap_Type) %>%
-  summarise(
-    SD = sd(Total_All_Species, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-for (j in 1:nrow(total_sds)) {
-  cat("  ", total_sds$Trap_Type[j], ": ", 
-      round(total_sds$SD[j], 2), "\n", sep = "")
-}
-
-overall_total_sd <- sd(HCM_Full_Aeae_with_total$Total_All_Species, na.rm = TRUE)
-cat("  All Traps: ", round(overall_total_sd, 2), "\n\n", sep = "")
-
-total_sds$Species <- "All Species Combined"
-total_sds_all <- total_sds %>%
-  add_row(Trap_Type = "All Traps", SD = overall_total_sd, 
-          Species = "All Species Combined")
-
-sd_results[["Total"]] <- total_sds_all
-
-# =============================================================================
-# Combine into single table
-# =============================================================================
-
-all_sds <- bind_rows(sd_results) %>%
-  dplyr::select(Species, Trap_Type, SD) %>%
-  mutate(SD = round(SD, 2))
-
-# Reorder
-all_sds <- all_sds %>%
-  arrange(
-    factor(Species, levels = c(species_names, "All Species Combined")),
-    factor(Trap_Type, levels = c("BG- Sentinel", "CDC Gravid", "CDC LT", "All Traps"))
-  )
-
-cat("=======================================================================\n")
-cat("  COMPLETE STANDARD DEVIATION TABLE\n")
-cat("=======================================================================\n\n")
-
-print(all_sds, n = Inf)
-
-# =============================================================================
-# Create formatted table matching your layout
-# =============================================================================
-
-cat("\n\n=======================================================================\n")
-cat("  FORMATTED TABLE (MATCHING YOUR LAYOUT)\n")
-cat("=======================================================================\n\n")
-
-# Pivot to wide format for easier viewing
-sd_wide <- all_sds %>%
-  pivot_wider(names_from = Trap_Type, values_from = SD)
-
-print(sd_wide, n = Inf)
-
-# =============================================================================
-# Create CSV output
-# =============================================================================
-
-csv_file <- "/mnt/user-data/outputs/standard_deviations_by_trap.csv"
-write.csv(all_sds, csv_file, row.names = FALSE)
-cat("\n\nCSV saved to:", csv_file, "\n")
-
-# Also save wide format
-csv_file_wide <- "/mnt/user-data/outputs/standard_deviations_wide.csv"
-write.csv(sd_wide, csv_file_wide, row.names = FALSE)
-cat("Wide format CSV saved to:", csv_file_wide, "\n")
-
-# =============================================================================
-# Summary statistics about the standard deviations
-# =============================================================================
-
-cat("\n\n=======================================================================\n")
-cat("  STANDARD DEVIATION SUMMARY\n")
-cat("=======================================================================\n\n")
-
-cat("Range of SDs across all species and trap types:\n")
-cat("  Minimum:", round(min(all_sds$SD, na.rm = TRUE), 2), "\n")
-cat("  Maximum:", round(max(all_sds$SD, na.rm = TRUE), 2), "\n")
-cat("  Mean:", round(mean(all_sds$SD, na.rm = TRUE), 2), "\n")
-cat("  Median:", round(median(all_sds$SD, na.rm = TRUE), 2), "\n\n")
-
-# Which species/trap combinations have highest variability?
-cat("Top 5 highest standard deviations:\n")
-top_sds <- all_sds %>%
-  arrange(desc(SD)) %>%
-  head(5)
-print(top_sds, row.names = FALSE)
-
-```
-
 
 
 
