@@ -250,12 +250,6 @@ If you use this data or code in your research, please cite:
 
 Pshea-Smith IA, et al. (2026). Modeling and Predicting Counts and Environmental Correlates of Mosquito Distributions in Haiti Using Surveillance Data from the Ouest Department. *American Journal of Tropical Medicine and Hygiene*. https://doi.org/10.4269/ajtmh.25-0324
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-**Data Usage:** All data are freely available for use with proper attribution.
-
 ## Contact
 
 Ian Pshea-Smith  
