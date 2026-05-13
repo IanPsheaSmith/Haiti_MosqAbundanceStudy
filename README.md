@@ -1,7 +1,6 @@
 # Haiti Mosquito Abundance Study
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![DOI](https://img.shields.io/badge/DOI-pending-blue.svg)](https://github.com/IanPsheaSmith/Haiti_MosqAbundanceStudy)
+[![DOI](https://img.shields.io/badge/DOI-10.4269%2Fajtmh.25--0324-blue.svg)](https://doi.org/10.4269/ajtmh.25-0324)
 
 **Interactive Website:** [https://ianpsheasmith.github.io/Haiti_MosqAbundanceStudy/](https://ianpsheasmith.github.io/Haiti_MosqAbundanceStudy/)
 
@@ -249,7 +248,7 @@ cd Haiti_MosqAbundanceStudy
 
 If you use this data or code in your research, please cite:
 
-[Author names]. (Year). [Manuscript title]. [Journal name]. DOI: [pending]
+Pshea-Smith IA, et al. (2026). Modeling and Predicting Counts and Environmental Correlates of Mosquito Distributions in Haiti Using Surveillance Data from the Ouest Department. *American Journal of Tropical Medicine and Hygiene*. https://doi.org/10.4269/ajtmh.25-0324
 
 ## License
 
@@ -278,6 +277,4 @@ Please use the [GitHub Issues](https://github.com/IanPsheaSmith/Haiti_MosqAbunda
 
 ---
 
-**Last Updated:** December 2025  
-**Repository Status:** Active Development  
-**Manuscript Status:** Accepted, under revisions
+**Last Updated:** May 2026  
